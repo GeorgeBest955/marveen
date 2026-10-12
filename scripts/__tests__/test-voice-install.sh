@@ -88,6 +88,10 @@ if [[ ! -f /.dockerenv && "${ALLOW_HOST_INSTALL:-}" != "1" ]]; then
   exit 2
 fi
 DEST="${INSTALL_DIR:-/tmp/voice-test}"
+# The installer under test. Overridable so the guard test can point it at a stub:
+# a version of this script without the container check (a bisect, a revert, a
+# mutant) must not be able to run the real installer on the test host.
+VOICE_INSTALLER="${VOICE_INSTALLER:-/marveen/scripts/install-voice.sh}"
 echo "==> Voice install acceptance test"
 echo "    INSTALL_DIR=$DEST"
 echo "    $(uname -a)"
@@ -103,7 +107,7 @@ command -v ffmpeg &>/dev/null                      && _fail "ffmpeg pre-installe
 
 # Run installer
 _section "Running installer"
-INSTALL_DIR="$DEST" bash /marveen/scripts/install-voice.sh
+INSTALL_DIR="$DEST" bash "$VOICE_INSTALLER"
 echo "    installer exited $?"
 
 # C1: venv + package import
@@ -258,7 +262,7 @@ fi
 
 # C7: Idempotence -- re-run installer, nothing breaks
 _section "C7: Idempotence (re-run)"
-INSTALL_DIR="$DEST" bash /marveen/scripts/install-voice.sh 2>&1 | grep -E "SKIP|PASS|complete" | head -10
+INSTALL_DIR="$DEST" bash "$VOICE_INSTALLER" 2>&1 | grep -E "SKIP|PASS|complete" | head -10
 "$DEST/venv/bin/python" -c "import faster_whisper, piper" \
   && _pass "packages still importable after re-run" \
   || _fail "packages broken after re-run"

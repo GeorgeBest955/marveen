@@ -22,9 +22,17 @@ echo "\$*" >> "$TMP/docker-calls"
 exit 0
 EOF
 chmod +x "$TMP/bin/docker"
+# The installer the self-test mode would run: a recording stub that fails, so even
+# a script version without the container check stops here instead of installing.
+cat > "$TMP/fake-installer.sh" <<EOF
+#!/bin/bash
+echo "installer \$*" >> "$TMP/installer-calls"
+exit 1
+EOF
+chmod +x "$TMP/fake-installer.sh"
 
-run() { rm -f "$TMP/docker-calls"; env -u SKIP_DOCKER -u WITH_DOCKER -u VOICE_TEST_CONTAINER -u ALLOW_HOST_INSTALL \
-  PATH="$TMP/bin:$PATH" "$@" bash "$SCRIPT" >"$TMP/out" 2>&1; echo $?; }
+run() { rm -f "$TMP/docker-calls" "$TMP/installer-calls"; env -u SKIP_DOCKER -u WITH_DOCKER -u VOICE_TEST_CONTAINER -u ALLOW_HOST_INSTALL \
+  PATH="$TMP/bin:$PATH" VOICE_INSTALLER="$TMP/fake-installer.sh" "$@" bash "$SCRIPT" >"$TMP/out" 2>&1; echo $?; }
 calls() { cat "$TMP/docker-calls" 2>/dev/null; }
 
 echo "1. a plain run does nothing"
@@ -51,7 +59,15 @@ else
   rc="$(run SKIP_DOCKER=1 INSTALL_DIR="$TMP/voice")"
   [ "$rc" = "2" ] && pass "exit 2" || fail "exit 2" "2" "$rc"
   grep -q "Voice install acceptance test" "$TMP/out" && fail "stops before the test starts" "no test banner" "banner printed" || pass "stops before the test starts"
+  [ ! -f "$TMP/installer-calls" ] && pass "the installer is never reached" || fail "the installer is never reached" "no call" "$(cat "$TMP/installer-calls")"
 fi
+
+echo "4. the installer path is the overridable one everywhere"
+# A source check on purpose: a live positive control would have to let the
+# self-test mode reach an installer, which is exactly what must never happen here.
+hard="$(grep -nE 'bash[[:space:]]+/marveen/scripts/install-voice\.sh' "$SCRIPT" | head -3)"
+over="$(grep -cE 'bash "\$VOICE_INSTALLER"' "$SCRIPT")"
+[ -z "$hard" ] && [ "$over" -ge 1 ] && pass "every installer call goes through \$VOICE_INSTALLER ($over)" || fail "installer calls overridable" "no hardcoded call" "${hard:-none hardcoded, $over overridable}"
 
 echo
 echo "PASS: $PASS  FAIL: $FAIL"
