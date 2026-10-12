@@ -55,6 +55,9 @@ esac
 EOF
 chmod +x "$TMP/launchctl"
 mkdir -p "$TMP/bin"; cp "$TMP/launchctl" "$TMP/bin/launchctl"
+# The platform is chosen here, not by whatever host runs the suite: CI is Linux,
+# and install-main-inbox-observer.sh exits "macOS-only" on a non-Darwin uname.
+printf '#!/bin/bash\necho Darwin\n' > "$TMP/bin/uname"; chmod +x "$TMP/bin/uname"
 
 # $1: installer basename; the rest: state flags (gui, norun). Echoes "<rc>|<stdout>|<stderr>".
 run_installer() {
@@ -111,6 +114,48 @@ for inst in install-channel-keepalive-probe install-stuck-modal-guard install-ma
 done
 assert_contains "the summary lists the helpers that do not run" "$M" 'SEGED-JOBOK, AMELYEK NEM FUTNAK'
 assert_contains "the summary prints the remedy per helper" "$M" 'print_periodic_unit_remedy "$HOME/Library/LaunchAgents/${_hl}.plist" "$_hl"'
+
+echo "== install-macos.sh, run: a helper that is not running is reported, and the install goes on"
+# note_helper_down and the closing-summary block, extracted from install-macos.sh
+# and run in a throwaway install whose helper installers only answer --print-label.
+NH="$(awk '/^note_helper_down\(\) \{/,/^\}$/' "$REPO/install-macos.sh")"
+SUMMARY="$(awk '/^# ISSUE1891 \(#1891\): a helper job that is not running is repeated at the end/,/^fi$/' "$REPO/install-macos.sh")"
+assert_contains "note_helper_down extracted" "$NH" "note_helper_down()"
+assert_contains "the summary block extracted" "$SUMMARY" 'if [ -n "${HELPERS_DOWN:-}" ]; then'
+mkdir -p "$TMP/inst/scripts"
+for inst in install-channel-keepalive-probe install-main-inbox-observer; do
+  printf '#!/bin/bash\n[ "${1:-}" = "--print-label" ] && echo com.test.%s\n' "${inst#install-}" > "$TMP/inst/scripts/$inst.sh"
+  chmod +x "$TMP/inst/scripts/$inst.sh"
+done
+RUN="$(PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP/home" INSTALL_DIR="$TMP/inst" /bin/bash -c "
+set -e
+trap 'echo ERR-TRAP; exit 1' ERR
+NC= DIM= BOLD= ORANGE= RED= GREEN= BLUE=
+. '$REPO/scripts/launchd-unit.sh'
+$NH
+note_helper_down install-channel-keepalive-probe
+note_helper_down install-main-inbox-observer
+$SUMMARY
+echo REACHED-AFTER-SUMMARY
+" 2>&1)"; RC=$?
+assert_eq "the block ends normally (a down helper does not stop or fail the install)" "0" "$RC"
+assert_contains "and the install goes on after it" "$RUN" "REACHED-AFTER-SUMMARY"
+assert_not_contains "no ERR trap" "$RUN" "ERR-TRAP"
+assert_contains "the closing summary is printed" "$RUN" "SEGED-JOBOK, AMELYEK NEM FUTNAK"
+assert_contains "it names the first helper" "$RUN" "com.test.channel-keepalive-probe: nem fut"
+assert_contains "it names the second helper" "$RUN" "com.test.main-inbox-observer: nem fut"
+assert_contains "with the remedy for each" "$RUN" \
+  "launchctl kickstart gui/$UID_/com.test.main-inbox-observer"
+RUN0="$(PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP/home" INSTALL_DIR="$TMP/inst" /bin/bash -c "
+set -e
+NC= DIM= BOLD= ORANGE= RED= GREEN= BLUE=
+. '$REPO/scripts/launchd-unit.sh'
+HELPERS_DOWN=''
+$SUMMARY
+echo REACHED-AFTER-SUMMARY
+" 2>&1)"
+assert_not_contains "no helper down: no summary block" "$RUN0" "SEGED-JOBOK"
+assert_contains "no helper down: the install goes on" "$RUN0" "REACHED-AFTER-SUMMARY"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"
