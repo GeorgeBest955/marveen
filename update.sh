@@ -642,6 +642,39 @@ migrate_channels_restart() {
   return 0
 }
 
+# UPDATETIMER1012 (#1902 follow-up): a timer whose unit file already exists is
+# not necessarily RUNNING. `enable` alone does not start a timer, and both of
+# ours fire on OnBootSec, which on a host that has been up for a while has
+# already passed -- so an install whose installer only enabled them (#1902)
+# keeps them inactive until the next reboot, the keepalive probe never refreshes,
+# and the channel monitor hard-restarts the main agent. The two repairs below
+# skipped every existing timer file, so the update never cured that host.
+# This starts such a timer, with no unit rewrite:
+#   - no systemd, or no user session (WSL, a container, a VPS without linger):
+#     nothing, the same guard the installer uses;
+#   - already active: nothing;
+#   - masked: nothing -- that is the operator's explicit "never run this";
+#   - otherwise `enable --now`, and if that fails, one line with the command
+#     that fixes it. Never fatal: update.sh runs under `set -e`, and a timer that
+#     cannot start must not stop the update (every call here is guarded).
+# One call per timer, so a broken unit cannot take the other one with it.
+_user_systemd_up() {
+  pidof systemd >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1
+}
+ensure_timer_running() {
+  local timer="$1" state
+  _user_systemd_up || return 0
+  systemctl --user is-active --quiet "$timer" 2>/dev/null && return 0
+  state="$(systemctl --user is-enabled "$timer" 2>/dev/null || true)"
+  [ "$state" = "masked" ] && return 0
+  if systemctl --user enable --now "$timer" >/dev/null 2>&1; then
+    echo -e "  Inaktiv timer elinditva: $timer"
+  else
+    echo -e "  FIGYELEM: $timer nem fut, es nem indult el -- inditsd kezzel: systemctl --user enable --now $timer"
+  fi
+  return 0
+}
+
 # Idle-path keepalive probe installation (Linux only). The repo has shipped
 # scripts/channel-keepalive-probe.sh and placeholder units under scripts/systemd/
 # for a while, but nothing ever installed them, so on every existing host the ONLY
@@ -655,7 +688,8 @@ migrate_channels_restart() {
 #
 # The installer template fix reaches new installs only -- this is what lands it on
 # the machines that have the bug today. Idempotent: it writes nothing once the
-# timer unit exists. The probe itself never fakes liveness (it proves the session,
+# timer unit exists (it then only starts the timer if it is not running, see
+# ensure_timer_running). The probe itself never fakes liveness (it proves the session,
 # its claude pid and a descending telegram poller are alive before touching), so a
 # genuinely dead channel still ages out and still gets recovered.
 install_keepalive_probe_timer() {
@@ -671,7 +705,11 @@ install_keepalive_probe_timer() {
     [ -f "$chan_unit" ] || continue
     _svc_id="$(basename "$chan_unit" -channels.service)"
     _ka_unit="${_svc_id}-channel-keepalive-probe"
-    [ -f "$units_dir/${_ka_unit}.timer" ] && continue
+    # An existing timer is not rewritten, but it is started if it is not running.
+    if [ -f "$units_dir/${_ka_unit}.timer" ]; then
+      ensure_timer_running "${_ka_unit}.timer"
+      continue
+    fi
     # BOT_NAME is only assigned further down this script, so read it here
     # instead of inheriting an empty one into the unit Description.
     _bot_name="$(sed -n 's/^BOT_NAME=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | tr -d '"')"
@@ -878,7 +916,10 @@ install_main_inbox_observer_unit() {
     [ -f "$chan_unit" ] || continue
     _svc_id="$(basename "$chan_unit" -channels.service)"
     _io_unit="${_svc_id}-main-inbox-observer"
-    [ -f "$units_dir/${_io_unit}.timer" ] && continue
+    if [ -f "$units_dir/${_io_unit}.timer" ]; then
+      ensure_timer_running "${_io_unit}.timer"
+      continue
+    fi
     _bot_name="$(sed -n 's/^BOT_NAME=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | tr -d '"')"
     [ -n "$_bot_name" ] || _bot_name="Marveen"
     _tz_line="# no explicit TZ detected; inheriting host default"

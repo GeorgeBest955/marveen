@@ -63,8 +63,16 @@ echo
 echo "update.sh install_keepalive_probe_timer"
 
 # Pull the function out of update.sh and run it for real.
-FN="$(awk '/^install_keepalive_probe_timer\(\) \{/,/^\}$/' "$REPO/update.sh")"
-if [ -z "$FN" ]; then
+# UPDATETIMER1012: an existing timer goes through ensure_timer_running, so the
+# two helpers come along. pidof is stubbed to "no systemd" here, which keeps the
+# existing-timer branch inert and this section about writing units; starting an
+# existing timer is pinned in update-timer-start.test.sh.
+HELPERS="$(awk '/^_user_systemd_up\(\) \{/,/^\}$/' "$REPO/update.sh")
+$(awk '/^ensure_timer_running\(\) \{/,/^\}$/' "$REPO/update.sh")"
+FNBODY="$(awk '/^install_keepalive_probe_timer\(\) \{/,/^\}$/' "$REPO/update.sh")"
+FN="$HELPERS
+$FNBODY"
+if [ -z "$FNBODY" ] || ! printf '%s' "$HELPERS" | grep -q '^ensure_timer_running() {'; then
   fail "install_keepalive_probe_timer() not found in update.sh"
   echo; echo "PASS=$PASS FAIL=$FAIL"; exit 1
 fi
@@ -84,6 +92,7 @@ echo "\$*" >> "$TMP/systemctl.calls"
 exit 0
 EOF
 chmod +x "$TMP/bin/systemctl"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/bin/pidof"; chmod +x "$TMP/bin/pidof"
 
 # $1: units dir. Runs the extracted function with the stub ahead of the real PATH.
 run_fn() {
