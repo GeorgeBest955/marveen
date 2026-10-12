@@ -13297,6 +13297,8 @@ function wireOnboarding(step) {
         // and on timeout stay on this step with an honest "still starting"
         // message -- the old fixed 4s opened the pairing step against a
         // booting session, which looked done-and-empty (WIZFLOW809).
+        // #1878 (6): a failed restart is said at once, not after the ~2 min wait below.
+        if (d.restartError) { botBtn.disabled = false; onbMsg(t('onboarding.step2.saved_restart_failed'), true); return }
         onbMsg(d.restarted ? t('onboarding.step2.saved_restarted') : t('onboarding.step2.saved'))
         onbMsg(t('onboarding.step2.waiting_channel'))
         const outcome = await waitForChannelLive(fetchOnboardingStatus, 3000, 40)  // ~2 min bound

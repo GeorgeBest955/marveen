@@ -1692,6 +1692,7 @@ window._i18n.hu = {
   'onboarding.step1.saved_unverified': 'Token elmentve (az ellenőrzés nem futott le, ettől még jó lehet).',
   'onboarding.flow_note': 'A négy lépés egymásra épül: a mentések után a rendszer magától újraindul, és a 4. lépés (párosítás) után kezd válaszolni. Addig a hiányzó lépésekre hivatkozó üzenetek normálisak.',
   'onboarding.step2.saved_restarted': 'Bot token elmentve, az ügynök újraindul az új bottal. Egy pillanat.',
+  'onboarding.step2.saved_restart_failed': 'A bot token elmentve, de az ügynök újraindítása nem sikerült. Indítsd újra kézzel (Linux: systemctl --user restart marveen-channels), aztán térj vissza ide.',
   'onboarding.step2.waiting_channel':'A csatorna indul az új bot tokennel. Ez hidegindításnál pár percig is eltarthat, kérlek várj, magától lép tovább.',
   'onboarding.step2.channel_slow':'A csatorna még mindig indul. Lassabb gépen ez tovább tarthat: várj egy kicsit, majd nyomd meg újra a Mentés gombot. Ha a csatorna közben felállt, azonnal továbblép. Ha 10 perc után sincs változás, nézd meg a store/channels-failures.log fájlt.',
   'onboarding.step3.svc_up': 'A bot-szolgáltatás fut, jöhet a párosítás.',

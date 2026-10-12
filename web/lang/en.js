@@ -1689,6 +1689,7 @@ window._i18n.en = {
   'onboarding.step1.saved_unverified': 'Token saved (verification did not run, it may still be valid).',
   'onboarding.flow_note': 'The four steps build on each other: after each save the system restarts itself, and it begins responding after step 4 (pairing). Until then, messages about missing steps are normal.',
   'onboarding.step2.saved_restarted': 'Bot token saved, the agent is restarting with the new bot. One moment.',
+  'onboarding.step2.saved_restart_failed': 'Bot token saved, but restarting the agent failed. Restart it manually (Linux: systemctl --user restart marveen-channels), then come back here.',
   'onboarding.step2.waiting_channel':'The channel is starting with the new bot token. A cold start can take a few minutes, please wait, it advances on its own.',
   'onboarding.step2.channel_slow':'The channel is still starting. On a slower machine this can take longer: wait a bit, then press Save again. If the channel has come up meanwhile, it advances immediately. If nothing changes after 10 minutes, check the store/channels-failures.log file.',
   'onboarding.step3.svc_up': 'The bot service is running, pairing can begin.',
