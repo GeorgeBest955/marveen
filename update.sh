@@ -729,7 +729,7 @@ EOF
 # wedge loop the Linux comment above describes. The respawn never clears the
 # condition that triggers it (nothing refreshes the file afterwards either), so
 # it repeats until the owner's first morning message warms the file.
-# Idempotent: once the plist exists this writes nothing and prints nothing. The
+# Idempotent: once the job is loaded this writes nothing and prints nothing. The
 # label is read from the installer so a rename there cannot silently turn this
 # into a weekly reload.
 install_keepalive_probe_launchd() {
@@ -740,13 +740,17 @@ install_keepalive_probe_launchd() {
   # #1873: the installer resolves its own com.<SERVICE_ID>.* label.
   _ka_label="$("$_ka_installer" --print-label 2>/dev/null | head -1)"
   [ -n "$_ka_label" ] || _ka_label="com.marveen.channel-keepalive-probe"
-  if [ -f "$HOME/Library/LaunchAgents/${_ka_label}.plist" ]; then
+  # ISSUE1891 (#1891): keyed on the job being LOADED, not on the plist existing
+  # (the stuck-modal guard below learned this in #1694): a plist whose job never
+  # ran -- a Mac without a GUI login, a failed load -- used to make this return
+  # quietly forever, while the dashboard kept respawning a healthy idle session.
+  if launchctl list "$_ka_label" >/dev/null 2>&1; then
     return 0
   fi
   if "$_ka_installer" --load >/dev/null 2>&1; then
     echo -e "  Keepalive-szonda telepitve (3 percenkent, hamis respawn ellen): ${_ka_label}"
   else
-    echo -e "  FIGYELEM: a keepalive-szonda telepitese nem sikerult -- inditsd kezzel: scripts/install-channel-keepalive-probe.sh --load"
+    echo -e "  FIGYELEM: a keepalive-szonda NEM FUT (${_ka_label}) -- a launchd csak GUI-bejelentkezesen belul futtatja. Javitas, a GUI-bejelentkezes egy terminaljabol: launchctl bootstrap gui/$(id -u) \"$HOME/Library/LaunchAgents/${_ka_label}.plist\" 2>/dev/null; launchctl kickstart gui/$(id -u)/${_ka_label}"
   fi
   return 0
 }
@@ -781,7 +785,7 @@ install_stuck_modal_guard_launchd() {
   if "$_sm_installer" --load >/dev/null 2>&1; then
     echo -e "  Beragadt-ablak or telepitve (percenkent; alapbol csak naploz, STUCK_MODAL_MODE): ${_sm_label}"
   else
-    echo -e "  FIGYELEM: a beragadt-ablak or telepitese nem sikerult -- inditsd kezzel: scripts/install-stuck-modal-guard.sh --load"
+    echo -e "  FIGYELEM: a beragadt-ablak or NEM FUT (${_sm_label}) -- a launchd csak GUI-bejelentkezesen belul futtatja. Javitas, a GUI-bejelentkezes egy terminaljabol: launchctl bootstrap gui/$(id -u) \"$HOME/Library/LaunchAgents/${_sm_label}.plist\" 2>/dev/null; launchctl kickstart gui/$(id -u)/${_sm_label}"
   fi
   return 0
 }
@@ -865,7 +869,8 @@ install_main_inbox_observer_unit() {
     if "$INSTALL_DIR/scripts/install-main-inbox-observer.sh" --load >/dev/null 2>&1; then
       echo -e "  Fo-agens inbox-figyelo telepitve (5 percenkent, launchd)"
     else
-      echo -e "  FIGYELEM: az inbox-figyelo telepitese nem sikerult -- kezzel: scripts/install-main-inbox-observer.sh --load"
+      _io_l="$("$INSTALL_DIR/scripts/install-main-inbox-observer.sh" --print-label 2>/dev/null | head -1)"
+      echo -e "  FIGYELEM: az inbox-figyelo NEM FUT (${_io_l}) -- a launchd csak GUI-bejelentkezesen belul futtatja. Javitas, a GUI-bejelentkezes egy terminaljabol: launchctl bootstrap gui/$(id -u) \"$HOME/Library/LaunchAgents/${_io_l}.plist\" 2>/dev/null; launchctl kickstart gui/$(id -u)/${_io_l}"
     fi
     return 0
   fi

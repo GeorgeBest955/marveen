@@ -163,9 +163,17 @@ assert_contains "run_unit_maintenance calls the launchd half" \
 MAC="$TMP/mac"
 mkdir -p "$MAC/install/scripts" "$MAC/home/Library/LaunchAgents" "$MAC/bin"
 
-# launchctl stub: its mere presence is the command -v gate; it is never the
-# thing under test (the real installer does the loading).
-printf '#!/bin/bash\nexit 0\n' > "$MAC/bin/launchctl"; chmod +x "$MAC/bin/launchctl"
+# launchctl stub. ISSUE1891: update.sh keys on the job being LOADED
+# (`launchctl list <label>`), not on the plist existing, so the stub answers
+# `list` from $MAC/loaded/<label>; the installer stub marks a label loaded when
+# it "succeeds".
+mkdir -p "$MAC/loaded"
+cat > "$MAC/bin/launchctl" <<EOF
+#!/bin/bash
+[ "\$1" = list ] && [ -n "\${2:-}" ] && { [ -e "$MAC/loaded/\$2" ]; exit \$?; }
+exit 0
+EOF
+chmod +x "$MAC/bin/launchctl"
 
 # Installer stub: records the call, and writes the plist the way the real one
 # does, so the idempotence contract is exercised end to end.
@@ -179,6 +187,7 @@ if [ "\${1:-}" = "--print-label" ]; then echo "\$LABEL"; exit 0; fi
 echo "\$*" >> "$MAC/installer.calls"
 mkdir -p "\$HOME/Library/LaunchAgents"
 : > "\$HOME/Library/LaunchAgents/$1.plist"
+[ "${2:-0}" = 0 ] && : > "$MAC/loaded/$1"
 exit ${2:-0}
 EOF
   chmod +x "$MAC/install/scripts/install-channel-keepalive-probe.sh"
@@ -226,7 +235,7 @@ assert_eq "renamed label is honoured on the idempotence check" "0" \
 # 3e. An install predating the installer script -> do nothing rather than fail
 #     the whole update.
 rm -f "$MAC/install/scripts/install-channel-keepalive-probe.sh"
-rm -f "$MAC/home/Library/LaunchAgents/"*.plist
+rm -f "$MAC/home/Library/LaunchAgents/"*.plist "$MAC/loaded/"*
 : > "$MAC/installer.calls"
 OUT="$(run_mac_fn Darwin)"
 assert_eq "missing installer -> nothing written" "0" \
@@ -235,9 +244,22 @@ assert_eq "missing installer -> update is not failed" "" "$OUT"
 
 # 3f. A failing installer must WARN, not pass silently.
 write_mac_installer "com.marveen.channel-keepalive-probe" 1
-rm -f "$MAC/home/Library/LaunchAgents/"*.plist
+rm -f "$MAC/home/Library/LaunchAgents/"*.plist "$MAC/loaded/"*
 OUT="$(run_mac_fn Darwin)"
 assert_contains "a failed install is reported, not swallowed" "$OUT" "FIGYELEM"
+assert_contains "and it carries the remedy for a GUI terminal" "$OUT" \
+  "launchctl bootstrap gui/$(id -u) \"$MAC/home/Library/LaunchAgents/com.marveen.channel-keepalive-probe.plist\" 2>/dev/null; launchctl kickstart gui/$(id -u)/com.marveen.channel-keepalive-probe"
+
+# 3g. ISSUE1891 (#1891): the plist is there but the job is NOT loaded -- a Mac
+#     without a GUI login, or a load that failed. That used to read as
+#     "installed" and return quietly forever; it must be retried (and reported).
+write_mac_installer "com.marveen.channel-keepalive-probe" 1
+rm -f "$MAC/loaded/"*
+: > "$MAC/home/Library/LaunchAgents/com.marveen.channel-keepalive-probe.plist"
+: > "$MAC/installer.calls"
+OUT="$(run_mac_fn Darwin)"
+assert_contains "plist present, job not loaded -> the installer is run again" "$(cat "$MAC/installer.calls")" "--load"
+assert_contains "and the update says it is not running" "$OUT" "NEM FUT"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

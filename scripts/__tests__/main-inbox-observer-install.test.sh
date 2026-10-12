@@ -41,7 +41,7 @@ assert_contains "runs the observer installer" "$MACOS" 'scripts/install-main-inb
 assert_contains "guards on the installer being present" "$MACOS" '[ -x "$INSTALL_DIR/scripts/install-main-inbox-observer.sh" ]'
 # Non-fatal, like the keepalive probe next to it: a failed observer install must
 # not take the whole installation down with it.
-assert_contains "a failure warns instead of aborting" "$MACOS" 'inbox-figyelo telepitese nem sikerult'
+assert_contains "a failure warns instead of aborting" "$MACOS" 'Az inbox-figyelo NEM FUT'
 echo ""
 
 # ---------------------------------------------------------------------------

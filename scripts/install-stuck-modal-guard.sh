@@ -93,8 +93,14 @@ PLIST_EOF
 echo "Wrote launchd unit: $PLIST"
 
 if [ "$LOAD" = "1" ]; then
-  launchctl unload "$PLIST" 2>/dev/null || true
-  launchctl load "$PLIST"
+  # ISSUE1891 (#1891): registered AND run once, verified -- not a bare load.
+  . "$SCRIPT_DIR/launchd-unit.sh"
+  RUNS="$(start_launchd_periodic_unit "$PLIST" "$LABEL")"
+  if [ -z "$RUNS" ]; then
+    echo "NOT RUNNING: $LABEL is installed but did not run. launchd runs these jobs only inside a GUI login session (an install over SSH has none). From a terminal of the GUI login:" >&2
+    print_periodic_unit_remedy "$PLIST" "$LABEL" >&2
+    exit 3
+  fi
   echo "Loaded $LABEL (every 60s + at load). Default STUCK_MODAL_MODE=log: it detects and logs a stuck main pane, nothing else. alert adds an owner alert; act enables Escape + respawn."
 else
   echo "Installed but NOT loaded. To start: launchctl load $PLIST"

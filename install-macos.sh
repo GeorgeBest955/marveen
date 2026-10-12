@@ -1571,6 +1571,21 @@ else
   print_services_remedy
 fi
 
+# ISSUE1891 (#1891): the three helper jobs below are verified by their own
+# installers now (registered in gui/<uid> AND run once). One that is not running
+# is collected here, warned about with its remedy, and repeated in the closing
+# summary -- before #1891 each helper printed "Loaded" after a bare
+# `launchctl load` and this file threw the output away, so on a Mac without a
+# GUI login nothing ever said that the keep-alive probe was not running. The
+# install's exit status is unchanged by a helper (the bot itself answers).
+HELPERS_DOWN=""
+note_helper_down() {
+  HELPERS_DOWN="${HELPERS_DOWN}${HELPERS_DOWN:+ }$1"
+  _nh_label="$("$INSTALL_DIR/scripts/$1.sh" --print-label 2>/dev/null | head -1)"
+  echo -e "    ${DIM}Javitas (a GUI-bejelentkezes egy terminaljabol):${NC}"
+  print_periodic_unit_remedy "$HOME/Library/LaunchAgents/${_nh_label}.plist" "$_nh_label"
+}
+
 # Idle-path keepalive probe (launchd twin of the Linux systemd timer). Without
 # it the ONLY producer of store/.channel-keepalive freshness is organic inbound
 # traffic, so a quiet night looks exactly like a wedged session: the file ages
@@ -1588,7 +1603,8 @@ if [ -x "$INSTALL_DIR/scripts/install-channel-keepalive-probe.sh" ]; then
   if "$INSTALL_DIR/scripts/install-channel-keepalive-probe.sh" --load >/dev/null 2>&1; then
     ok "Keepalive-szonda telepitve (3 percenkent, hamis respawn ellen)"
   else
-    warn "A keepalive-szonda telepitese nem sikerult -- inditsd kezzel: scripts/install-channel-keepalive-probe.sh --load"
+    warn "A keepalive-szonda NEM FUT (telepites vagy elso futas nem igazolt) -- nelkule a figyelo 45 perc csend utan ujrainditja az ep fo sessiont"
+    note_helper_down install-channel-keepalive-probe
   fi
 fi
 
@@ -1603,7 +1619,8 @@ if [ -x "$INSTALL_DIR/scripts/install-stuck-modal-guard.sh" ]; then
   if "$INSTALL_DIR/scripts/install-stuck-modal-guard.sh" --load >/dev/null 2>&1; then
     ok "Beragadt-ablak or telepitve (percenkent; alapbol csak naploz, beavatkozni a STUCK_MODAL_MODE=act kapcsoloval fog)"
   else
-    warn "A beragadt-ablak or telepitese nem sikerult -- inditsd kezzel: scripts/install-stuck-modal-guard.sh --load"
+    warn "A beragadt-ablak or NEM FUT (telepites vagy elso futas nem igazolt)"
+    note_helper_down install-stuck-modal-guard
   fi
 fi
 
@@ -1620,7 +1637,8 @@ if [ -x "$INSTALL_DIR/scripts/install-main-inbox-observer.sh" ]; then
   if "$INSTALL_DIR/scripts/install-main-inbox-observer.sh" --load >/dev/null 2>&1; then
     ok "Fo-agens inbox-figyelo telepitve (5 percenkent, a dashboard folyamaton KIVUL)"
   else
-    warn "Az inbox-figyelo telepitese nem sikerult -- inditsd kezzel: scripts/install-main-inbox-observer.sh --load"
+    warn "Az inbox-figyelo NEM FUT (telepites vagy elso futas nem igazolt)"
+    note_helper_down install-main-inbox-observer
   fi
 fi
 
@@ -1796,6 +1814,22 @@ if [ "${INSTALL_AUTH_STATE:-UNKNOWN}" != "OK" ]; then
   fi
   echo -e "  ${BOLD}  Javitas: ${BLUE}bash \"$INSTALL_DIR/scripts/auth.sh\"${NC}${BOLD} majd ${BLUE}bash \"$INSTALL_DIR/scripts/channels.sh\" restart${NC}"
   echo ""
+fi
+
+# ISSUE1891 (#1891): a helper job that is not running is repeated at the end as
+# well, with its remedy, for whoever reads only the end of the run.
+if [ -n "${HELPERS_DOWN:-}" ]; then
+  echo ""
+  echo -e "  ${ORANGE}! SEGED-JOBOK, AMELYEK NEM FUTNAK:${NC}"
+  for _h in $HELPERS_DOWN; do
+    _hl="$("$INSTALL_DIR/scripts/$_h.sh" --print-label 2>/dev/null | head -1)"
+    echo -e "    ${DIM}  - ${_hl}: nem fut${NC}"
+  done
+  echo -e "    A launchd ezeket csak egy GUI-bejelentkezesen belul futtatja. Javitas, a GUI-bejelentkezes egy terminaljabol:"
+  for _h in $HELPERS_DOWN; do
+    _hl="$("$INSTALL_DIR/scripts/$_h.sh" --print-label 2>/dev/null | head -1)"
+    print_periodic_unit_remedy "$HOME/Library/LaunchAgents/${_hl}.plist" "$_hl"
+  done
 fi
 
 # #1871: the services' state is repeated LAST too, with the same remedy, and a
