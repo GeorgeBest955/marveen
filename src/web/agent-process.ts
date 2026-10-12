@@ -1260,6 +1260,33 @@ export function gitToplevelFor(
   }
 }
 
+// #1904 (review of #1911): the key to stamp beside an agent dir, or null. It is
+// the install root, resolved, and only when the install root IS a git toplevel
+// (a git-checkout install). A tarball install, even one under a home that is a
+// git repo, gets null: git would answer with the home, which is not ours. git
+// prints the toplevel resolved (symlinks followed, measured), so it is compared
+// with realpath(PROJECT_ROOT); a GIT_WORK_TREE or GIT_DIR that leaked through
+// answers another path and simply does not match. Looked up ONCE per process
+// and root: the lookup is a synchronous git call, and per agent start it held
+// the dashboard's event loop for tens of ms, up to the 3 s timeout on a hung git.
+const installRootTrustCache = new Map<string, string | null>()
+export function installRootTrustKey(
+  root: string = PROJECT_ROOT,
+  lookup: (dir: string) => string | null = gitToplevelFor,
+): string | null {
+  const cached = installRootTrustCache.get(root)
+  if (cached !== undefined) return cached
+  let key: string | null = null
+  try {
+    const real = realpathSync(root)
+    key = lookup(root) === real ? real : null
+  } catch {
+    key = null
+  }
+  installRootTrustCache.set(root, key)
+  return key
+}
+
 // Pre-accept the PER-PROJECT first-run consent for an agent's working dir in
 // the config root the session will boot from. Claude Code keys the "Do you
 // trust the files in this folder?" dialog on projects[<cwd>].hasTrustDialogAccepted
@@ -1276,18 +1303,20 @@ export function gitToplevelFor(
 // atomic and only performed on actual change, so a live Claude Code process
 // racing us never sees a torn file and an already-stamped launch is a no-op.
 //
-// #1904: it also stamps the dir's GIT TOPLEVEL. Claude Code
+// #1904: on a git-checkout install it also stamps the INSTALL ROOT. Claude Code
 // decides whether to honour a project's .claude/settings.json permissions.allow
 // by the trust of the git root, not of the cwd: with only agents/<name> stamped
 // it prints "Ignoring N permissions.allow entries ... this workspace has not
-// been trusted", so on a git-checkout install a strict-profile (dontAsk) agent
-// lost its whole allow-list and could only read. The toplevel comes from
-// gitToplevelFor; outside a git repo (or without git) it is null and the stamp
-// is what it was before.
+// been trusted", so a strict-profile (dontAsk) agent lost its whole allow-list
+// and could only read. Only the install root is ever added (installRootTrustKey),
+// never the git root of the agent dir itself: that can lie outside the install
+// (a tarball install under a dotfiles-repo home, an agents/<name> symlinked into
+// another repository), and stamping it would accept a foreign directory's
+// settings hooks and .mcp.json without the trust question (review of #1911).
 export function stampProjectTrustForDir(
   dotClaudePath: string,
   projectDir: string,
-  toplevel: string | null = gitToplevelFor(projectDir),
+  toplevel: string | null = installRootTrustKey(),
 ): boolean {
   try {
     let data: Record<string, unknown> = {}
@@ -1296,8 +1325,6 @@ export function stampProjectTrustForDir(
     }
     const dirs = new Set<string>([projectDir])
     try { dirs.add(realpathSync(projectDir)) } catch { /* dir may not resolve yet */ }
-    // git prints the toplevel already resolved (symlinks followed, measured), which is
-    // the form Claude Code keys trust by, so it needs no realpath of its own.
     if (toplevel) dirs.add(toplevel)
     const projects: Record<string, unknown> =
       (data.projects && typeof data.projects === 'object' && !Array.isArray(data.projects))
