@@ -30,6 +30,16 @@ set -u
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STORE="$INSTALL_DIR/store"
 KEEPALIVE_FILE="$STORE/.channel-keepalive"
+# ISSUE1891 (b): the producer's OWN stamp, written at the start of EVERY run,
+# whatever the run then finds. store/.channel-keepalive cannot tell the dashboard
+# that this probe runs: channels.sh touches it on every (re)spawn and inbound
+# traffic warms it, so the channel-monitor's loop breaker read a respawn's own
+# touch as "the producer is back" and let the next respawn through -- on a Mac
+# whose probe never ran (no GUI login) that was a respawn of a healthy session
+# every 45 minutes, forever. Only this file moves when the probe itself runs.
+# The content is the epoch; the mtime is what the monitor reads.
+PRODUCER_STAMP="$STORE/.channel-keepalive-probe"
+date +%s > "$PRODUCER_STAMP" 2>/dev/null || true
 LOG_TAG="channel-keepalive-probe"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$LOG_TAG] $*"; }

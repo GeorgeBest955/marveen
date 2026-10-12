@@ -3,7 +3,7 @@ import { writeMainExtraPluginsSettings } from './main-extra-plugins-settings.js'
 import { decideSkipTrace, decideMenuPassTrace, type SkipTraceState } from './monitor-trace.js'
 import { releaseOwnRespawnStamp, type OwnRespawnStamp } from './respawn-stamp-release.js'
 import { existsSync, readFileSync, statSync, writeFileSync, utimesSync } from 'node:fs'
-import { hostname, loadavg, cpus } from 'node:os'
+import { hostname, loadavg, cpus, homedir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync, spawn } from 'node:child_process'
 import { makeLazyBinResolver } from '../platform.js'
@@ -1771,26 +1771,85 @@ let marveenLastKeepaliveRespawn = 0
 // resume normal behaviour as soon as the file moves again. A dead poller is
 // real deafness and is never held back by this breaker.
 export const KEEPALIVE_USELESS_RESPAWN_LIMIT = 2
-let keepaliveUselessRespawns = 0
-let keepaliveMtimeAtLastRespawn: number | null = null
-let keepaliveLoopAlerted = false
+//
+// ISSUE1891 (b): "advanced" is the PRODUCER's own stamp, never store/.channel-keepalive.
+// The keepalive file is written by more than the producer: channels.sh touches it on
+// every (re)spawn and refreshKeepaliveFromInbound() warms it from inbound traffic. The
+// breaker used to read that file, so each respawn's own touch looked like "the producer
+// is back": the count reset, the breaker released, and on a Mac whose probe never ran
+// (no GUI login) a healthy session was respawned every 45 minutes, forever. The probe
+// now stamps store/.channel-keepalive-probe on every run; only that stamp counts.
+const KEEPALIVE_PRODUCER_STAMP = join(PROJECT_ROOT, 'store', '.channel-keepalive-probe')
+
+export interface KeepaliveLoopState {
+  uselessRespawns: number
+  /** The producer stamp's mtime when we last respawned (null: no stamp then). */
+  producerAtLastRespawn: number | null
+  /** Whether a keepalive respawn has happened since the last release (a baseline exists). */
+  respawned: boolean
+  alerted: boolean
+}
+export const KEEPALIVE_LOOP_INITIAL: KeepaliveLoopState = { uselessRespawns: 0, producerAtLastRespawn: null, respawned: false, alerted: false }
+let keepaliveLoop: KeepaliveLoopState = { ...KEEPALIVE_LOOP_INITIAL }
+
+/** Pure: has the producer run since our last keepalive respawn? No respawn yet = nothing to judge = yes. */
+export function keepaliveProducerAdvanced(state: KeepaliveLoopState, producerMtimeMs: number | null): boolean {
+  if (!state.respawned) return true
+  if (producerMtimeMs == null) return false
+  return state.producerAtLastRespawn == null || producerMtimeMs > state.producerAtLastRespawn
+}
+
+/** Pure: a held breaker releases only when the producer stamp moved since the last respawn. */
+export function releaseKeepaliveLoop(state: KeepaliveLoopState, producerMtimeMs: number | null): { state: KeepaliveLoopState; released: boolean } {
+  if (!state.alerted || !keepaliveProducerAdvanced(state, producerMtimeMs)) return { state, released: false }
+  return { state: { ...KEEPALIVE_LOOP_INITIAL }, released: true }
+}
 
 export type KeepaliveLoopDecision = 'respawn' | 'hold' | 'hold-and-alert'
 
-export function decideKeepaliveLoop(opts: {
-  pollerAlive: boolean
-  keepaliveMtimeMs: number | null
-  mtimeAtLastRespawn: number | null
-  uselessRespawns: number
-  alreadyAlerted: boolean
-  limit: number
-}): { decision: KeepaliveLoopDecision; uselessRespawns: number } {
-  if (!opts.pollerAlive) return { decision: 'respawn', uselessRespawns: 0 }
-  const advanced = opts.mtimeAtLastRespawn == null || opts.keepaliveMtimeMs == null
-    || opts.keepaliveMtimeMs > opts.mtimeAtLastRespawn
-  const useless = advanced ? 0 : opts.uselessRespawns + (opts.mtimeAtLastRespawn == null ? 0 : 1)
-  if (useless < opts.limit) return { decision: 'respawn', uselessRespawns: useless }
-  return { decision: opts.alreadyAlerted ? 'hold' : 'hold-and-alert', uselessRespawns: useless }
+/**
+ * Pure: the breaker's verdict on a stale keepalive that would otherwise respawn.
+ * A dead poller is real deafness and always respawns. With a live poller, a respawn
+ * after which the producer stamp did not move counts as useless; after `limit` of them
+ * hold, and alert once. On 'respawn' the returned state records the producer stamp
+ * as the next baseline.
+ */
+export function decideKeepaliveLoop(
+  state: KeepaliveLoopState,
+  obs: { pollerAlive: boolean; producerMtimeMs: number | null },
+  limit: number = KEEPALIVE_USELESS_RESPAWN_LIMIT,
+): { decision: KeepaliveLoopDecision; state: KeepaliveLoopState } {
+  const atRespawn = (useless: number): KeepaliveLoopState =>
+    ({ ...state, uselessRespawns: useless, producerAtLastRespawn: obs.producerMtimeMs, respawned: true })
+  if (!obs.pollerAlive) return { decision: 'respawn', state: atRespawn(0) }
+  const useless = keepaliveProducerAdvanced(state, obs.producerMtimeMs) ? 0 : state.uselessRespawns + 1
+  if (useless < limit) return { decision: 'respawn', state: atRespawn(useless) }
+  return {
+    decision: state.alerted ? 'hold' : 'hold-and-alert',
+    state: { ...state, uselessRespawns: useless, alerted: true },
+  }
+}
+
+/**
+ * The helper job that produces the keepalive, and the command that starts it, per
+ * platform -- what the loop-breaker alert names. macOS: the launchd job
+ * com.<SERVICE_ID>.channel-keepalive-probe, run from a terminal of the GUI login (the
+ * only place gui/<uid> exists). Linux: the user timer <SERVICE_ID>-channel-keepalive-probe.timer.
+ */
+export function keepaliveProducerRemedy(platform: string, serviceId: string, uid: number, home: string): { job: string; command: string } {
+  if (platform === 'darwin') {
+    const label = `com.${serviceId}.channel-keepalive-probe`
+    return {
+      job: `${label} (launchd)`,
+      command: `launchctl bootstrap gui/${uid} "${home}/Library/LaunchAgents/${label}.plist" 2>/dev/null; launchctl kickstart gui/${uid}/${label}`,
+    }
+  }
+  const timer = `${serviceId}-channel-keepalive-probe.timer`
+  return { job: `${timer} (systemd --user)`, command: `systemctl --user enable --now ${timer}` }
+}
+
+function readProducerStampMtime(): number | null {
+  try { return statSync(KEEPALIVE_PRODUCER_STAMP).mtimeMs } catch { return null }
 }
 
 /**
@@ -1892,6 +1951,18 @@ function checkMainKeepaliveStaleness(): void {
   // judge staleness, so a busy-but-alive session is never seen as stale-deaf.
   refreshKeepaliveFromInbound()
 
+  // ISSUE1891 (b): a held loop breaker releases when -- and only when -- the
+  // PRODUCER ran again (its own stamp moved). Checked before the liveness
+  // shortcut below, so the release is seen on the first tick after the probe
+  // is back, not only on the next stale one. Said once, like the hold.
+  const producerMtimeMs = readProducerStampMtime()
+  const rel = releaseKeepaliveLoop(keepaliveLoop, producerMtimeMs)
+  keepaliveLoop = rel.state
+  if (rel.released) {
+    logger.info('Keepalive producer ran again -- loop breaker released')
+    sendAlert(`✅ A keep-alive jelző (szonda) újra fut, a fő channel figyelője visszaállt a normál működésre.`)
+  }
+
   // GROUND-TRUTH SHORTCUT (2026-06-01 21:18 incident): if the channel
   // plugin's bun poller is ALIVE under Marveen's claude pid, the channel
   // is healthy by definition -- Telegram traffic CAN reach us. A stale
@@ -1934,14 +2005,6 @@ function checkMainKeepaliveStaleness(): void {
     ageMs = null // file missing -> keep-alive not yet established
   }
   const now = Date.now()
-  const keepaliveMtimeMs = ageMs == null ? null : now - ageMs
-  if (keepaliveLoopAlerted && keepaliveMtimeAtLastRespawn != null && keepaliveMtimeMs != null
-      && keepaliveMtimeMs > keepaliveMtimeAtLastRespawn) {
-    logger.info('Keepalive advanced again -- loop breaker released')
-    keepaliveLoopAlerted = false
-    keepaliveUselessRespawns = 0
-    keepaliveMtimeAtLastRespawn = null
-  }
   // B2 fix: cross-path grace — use the later of the two respawn timestamps so
   // an inbound-probe respawn also suppresses the keepalive path for the grace window.
   const msSinceLastRespawn = lastMainRespawnAt() ? now - lastMainRespawnAt() : null
@@ -1963,20 +2026,14 @@ function checkMainKeepaliveStaleness(): void {
     return
   }
   const ageMin = Math.round((ageMs ?? 0) / 60000)
-  const loop = decideKeepaliveLoop({
-    pollerAlive,
-    keepaliveMtimeMs,
-    mtimeAtLastRespawn: keepaliveMtimeAtLastRespawn,
-    uselessRespawns: keepaliveUselessRespawns,
-    alreadyAlerted: keepaliveLoopAlerted,
-    limit: KEEPALIVE_USELESS_RESPAWN_LIMIT,
-  })
-  keepaliveUselessRespawns = loop.uselessRespawns
+  // ISSUE1891 (b): the producer's stamp, NOT the keepalive mtime, judges a respawn.
+  const loop = decideKeepaliveLoop(keepaliveLoop, { pollerAlive, producerMtimeMs })
+  keepaliveLoop = loop.state
   if (loop.decision !== 'respawn') {
     if (loop.decision === 'hold-and-alert') {
-      keepaliveLoopAlerted = true
-      logger.warn({ ageMs, uselessRespawns: loop.uselessRespawns }, 'Keepalive loop breaker: respawns did not advance the keepalive while the poller is alive -- holding further respawns (KEEPALIVELOOP923)')
-      sendAlert(`⚠️ A fő channel keep-alive ${ageMin} perce nem frissül, de a Telegram-poller él, és ${loop.uselessRespawns} újraindítás sem segített. További újraindítást NEM csinálok (csak a beszélgetést vinné el). Valószínűleg a jelző-forrás akadt el: nézd meg a com.${SERVICE_ID}.channel-keepalive-probe launchd jobot és a store/channel-keepalive-probe.log-ot. Ha a jelző újra frissül, a figyelő magától visszaáll.`)
+      const fix = keepaliveProducerRemedy(process.platform, SERVICE_ID, process.getuid ? process.getuid() : 0, homedir())
+      logger.warn({ ageMs, uselessRespawns: loop.state.uselessRespawns, producerMtimeMs }, 'Keepalive loop breaker: the keepalive producer did not run since our respawns while the poller is alive -- holding further respawns (KEEPALIVELOOP923, ISSUE1891)')
+      sendAlert(`⚠️ A fő channel keep-alive ${ageMin} perce nem frissül, de a Telegram-poller él, és ${loop.state.uselessRespawns} újraindítás óta a jelző (szonda) egyszer sem futott. További újraindítást NEM csinálok (csak a beszélgetést vinné el). A jelző: ${fix.job}. Indítsd el: ${fix.command} (macOS-en a GUI-bejelentkezés egy terminaljából). Napló: store/channel-keepalive-probe.log. Ha a jelző újra fut, a figyelő magától visszaáll, és szólok.`)
     }
     return
   }
@@ -1995,7 +2052,6 @@ function checkMainKeepaliveStaleness(): void {
   if (!staleDueToSleep) {
     sendRoutineAlert('keepalive-respawn', `⚠️ A fő channel keep-alive ${ageMin} perce nem frissült -- respawn-pane a ${MAIN_CHANNELS_SESSION} session-on (a beszelgetes elveszik, memoria marad).`)
   }
-  keepaliveMtimeAtLastRespawn = keepaliveMtimeMs
   if (respawnMarveenSessionFresh()) {
     marveenLastKeepaliveRespawn = now
     // Suppress the process-down handler during the respawn window (reuses the
