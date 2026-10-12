@@ -90,7 +90,7 @@ import {
   agentChannelDir,
 } from '../channel-invites.js'
 import { hardRestartMarveenChannels } from '../channel-monitor.js'
-import { isMainChannelsAgent, MAIN_CHANNELS_SESSION, withoutMainAgent } from '../main-agent.js'
+import { channelsRestartCommand, isMainChannelsAgent, MAIN_CHANNELS_SESSION, withoutMainAgent } from '../main-agent.js'
 import {
   getProvider,
   channelStateDir,
@@ -1461,7 +1461,7 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
           }
         }
       }
-      json(res, { ok: true, botName: 'Google Chat', restarted: gcRestarted, wasRunning: gcWasRunning, ...(gcRestartError ? { restartError: gcRestartError } : {}) })
+      json(res, { ok: true, botName: 'Google Chat', restarted: gcRestarted, wasRunning: gcWasRunning, ...(gcRestartError ? { restartError: gcRestartError, restartCommand: channelsRestartCommand() } : {}) })
       return true
     }
 
@@ -1601,7 +1601,7 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
       }
     }
 
-    json(res, { ok: true, botName: validation.botName, restarted, wasRunning, ...(restartError ? { restartError } : {}), ...(asExtra ? { extra: true } : {}) })
+    json(res, { ok: true, botName: validation.botName, restarted, wasRunning, ...(restartError ? { restartError, restartCommand: channelsRestartCommand() } : {}), ...(asExtra ? { extra: true } : {}) })
     return true
   }
 

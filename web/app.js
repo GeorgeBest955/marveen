@@ -5715,7 +5715,10 @@ document.getElementById('chConnectBtn').addEventListener('click', async () => {
       throw new Error(err.error || 'Kapcsolodasi hiba')
     }
     const result = await res.json()
-    showToast(`${getProviderLabel()} sikeresen csatlakoztatva!`)
+    // #1878 (6): on the main agent the save restarts the channels session; a failed
+    // restart must not read as "connected".
+    if (result.restartError) showToast(t('agents.channel.saved_restart_failed', { provider: getProviderLabel(), cmd: result.restartCommand || '' }), 12000)
+    else showToast(`${getProviderLabel()} sikeresen csatlakoztatva!`)
     // Refresh detail
     await openAgentDetail(currentAgent.name)
     loadAgents()
@@ -13211,7 +13214,7 @@ function wireOnboarding(step) {
         // surface the automatic channels restart (same pattern as the
         // claude-auth step) instead of silently advancing.
         if (typeof initSidebarBrand === 'function') initSidebarBrand()
-        if (d.restartError) { idBtn.disabled = false; onbMsg(t('onboarding.identity.saved_restart_failed'), true); setTimeout(refreshOnboarding, 6000); return }
+        if (d.restartError) { idBtn.disabled = false; onbMsg(t('onboarding.identity.saved_restart_failed', { cmd: d.restartCommand || '' }), true); setTimeout(refreshOnboarding, 6000); return }
         if (d.restarted) { onbMsg(t('onboarding.identity.saved_restarted')); setTimeout(refreshOnboarding, 2500); return }
         if (d.restartNeeded) { onbMsg(t('onboarding.identity.saved_restart_needed')); await refreshOnboarding(); return }
         onbMsg(t('onboarding.identity.saved'))
@@ -13234,7 +13237,7 @@ function wireOnboarding(step) {
         // unauthenticated) channels session right after the first auth save --
         // surface that, and on failure show the manual restart step instead of
         // silently advancing.
-        if (d.restartError) { authBtn.disabled = false; onbMsg(t('onboarding.step1.saved_restart_failed'), true); setTimeout(refreshOnboarding, 6000); return }
+        if (d.restartError) { authBtn.disabled = false; onbMsg(t('onboarding.step1.saved_restart_failed', { cmd: d.restartCommand || '' }), true); setTimeout(refreshOnboarding, 6000); return }
         if (d.restarted) { onbMsg(t('onboarding.step1.saved_restarted')); setTimeout(refreshOnboarding, 2500); return }
         onbMsg(d.verified ? t('onboarding.step1.saved_verified') : t('onboarding.step1.saved_unverified'))
         await refreshOnboarding()
@@ -13298,7 +13301,7 @@ function wireOnboarding(step) {
         // message -- the old fixed 4s opened the pairing step against a
         // booting session, which looked done-and-empty (WIZFLOW809).
         // #1878 (6): a failed restart is said at once, not after the ~2 min wait below.
-        if (d.restartError) { botBtn.disabled = false; onbMsg(t('onboarding.step2.saved_restart_failed'), true); return }
+        if (d.restartError) { botBtn.disabled = false; onbMsg(t('onboarding.step2.saved_restart_failed', { cmd: d.restartCommand || '' }), true); return }
         onbMsg(d.restarted ? t('onboarding.step2.saved_restarted') : t('onboarding.step2.saved'))
         onbMsg(t('onboarding.step2.waiting_channel'))
         const outcome = await waitForChannelLive(fetchOnboardingStatus, 3000, 40)  // ~2 min bound
