@@ -245,7 +245,10 @@ describe('the binding', () => {
   })
   it("the keepalive alert names this install's job", () => {
     const mon = readFileSync(join(ROOT, 'src', 'web', 'channel-monitor.ts'), 'utf-8')
-    expect(mon).toContain('com.${SERVICE_ID}.channel-keepalive-probe launchd jobot')
+    // #1891 (b): the alert takes the job and its fix from keepaliveProducerRemedy,
+    // which builds the label from the SERVICE_ID the call site passes.
+    expect(mon).toContain('const label = `com.${serviceId}.channel-keepalive-probe`')
+    expect(mon).toContain('keepaliveProducerRemedy(process.platform, SERVICE_ID,')
     expect(mon).not.toContain('com.marveen.channel-keepalive-probe')
   })
 })
