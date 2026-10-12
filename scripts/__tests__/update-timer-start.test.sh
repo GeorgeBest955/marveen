@@ -59,6 +59,7 @@ case "\$cmd" in
   is-enabled)
     u="\$1"
     if [ -e "$ST/masked/\$u" ]; then echo masked; exit 1; fi
+    if [ -e "$ST/masked-runtime/\$u" ]; then echo masked-runtime; exit 1; fi
     if [ -e "$ST/enabled/\$u" ]; then echo enabled; exit 0; fi
     echo disabled; exit 1 ;;
   enable|start)
@@ -66,7 +67,7 @@ case "\$cmd" in
     rc=0
     for u in "\$@"; do
       case "\$u" in --now) now=1; continue ;; esac
-      if [ -e "$ST/fail/\$u" ] || [ ! -e "$ST/units/\$u" ] || [ -e "$ST/masked/\$u" ]; then
+      if [ -e "$ST/fail/\$u" ] || [ ! -e "$ST/units/\$u" ] || [ -e "$ST/masked/\$u" ] || [ -e "$ST/masked-runtime/\$u" ]; then
         echo "Failed to \$cmd \$u" >&2; rc=1; continue
       fi
       [ "\$cmd" = enable ] && touch "$ST/enabled/\$u"
@@ -90,7 +91,7 @@ IO=hex-main-inbox-observer.timer
 # A host the installer set up: channels unit + both timer pairs on disk, both
 # timers enabled, neither running (the #1902 state). $1..: extra setup words.
 reset_host() {
-  rm -rf "$ST" "$TMP/units"; mkdir -p "$ST/active" "$ST/enabled" "$ST/masked" "$ST/fail" "$ST/units" "$TMP/units"
+  rm -rf "$ST" "$TMP/units"; mkdir -p "$ST/active" "$ST/enabled" "$ST/masked" "$ST/masked-runtime" "$ST/fail" "$ST/units" "$TMP/units"
   : > "$ST/calls"
   printf '[Service]\n' > "$TMP/units/hex-channels.service"
   for u in hex-channel-keepalive-probe hex-main-inbox-observer; do
@@ -153,6 +154,13 @@ OUT="$(run_update)"
 assert_not_contains "no enable/start for the masked timer" "$(cat "$ST/calls")" "enable --now $KA"
 assert_not_contains "no warning about it" "$OUT" "$KA"
 assert_eq "the unmasked one is still started" yes "$(active $IO)"
+
+echo "5b. a runtime mask (systemctl mask --runtime) is an opt-out too: no start, no warning asking to undo it"
+reset_host; touch "$ST/masked-runtime/$KA"
+OUT="$(run_update)"
+assert_not_contains "no enable/start for the runtime-masked timer" "$(cat "$ST/calls")" "enable --now $KA"
+assert_not_contains "no warning about it" "$OUT" "$KA"
+assert_eq "the other one is still started" yes "$(active $IO)"
 
 echo "6. no systemd at all: the branch does not run"
 reset_host; touch "$ST/no-systemd"

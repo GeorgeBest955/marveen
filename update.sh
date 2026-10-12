@@ -666,7 +666,12 @@ ensure_timer_running() {
   _user_systemd_up || return 0
   systemctl --user is-active --quiet "$timer" 2>/dev/null && return 0
   state="$(systemctl --user is-enabled "$timer" 2>/dev/null || true)"
-  [ "$state" = "masked" ] && return 0
+  # masked-runtime too (`systemctl mask --runtime`, until the next reboot): the
+  # same "never run this", so no start and no warning that would ask the
+  # operator to undo their own mask (review of #1915).
+  case "$state" in
+    masked|masked-runtime) return 0 ;;
+  esac
   if systemctl --user enable --now "$timer" >/dev/null 2>&1; then
     echo -e "  Inaktiv timer elinditva: $timer"
   else
