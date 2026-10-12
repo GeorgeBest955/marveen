@@ -200,19 +200,24 @@ async function sendToChat(chatId: string, text: string): Promise<ChannelSendResu
 
   let delivered = 0
   let lastError: unknown
-  for (const chunk of chunks) {
+  const parseMode = CHANNEL_PROVIDER === 'telegram' ? 'HTML' : undefined
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i]
     try {
-      const parseMode = CHANNEL_PROVIDER === 'telegram' ? 'HTML' : undefined
       await provider.sendMessage(CHANNEL_TOKEN, chatId, chunk, parseMode)
       delivered++
     } catch (err) {
       lastError = err
+      // #1878 (9): the fallback is THIS chunk without formatting. It used to be
+      // outbound.slice(0, 4096), so a failure on chunk N sent the start of the
+      // whole message again and chunk N was never delivered.
       try {
-        // Retry once unformatted: a parse-mode rejection is the common case.
-        await provider.sendMessage(CHANNEL_TOKEN, chatId, outbound.slice(0, 4096))
+        await provider.sendMessage(CHANNEL_TOKEN, chatId, parseMode === 'HTML' ? telegramHtmlToPlain(chunk) : chunk)
         delivered++
       } catch (err2) {
         lastError = err2
+        // Last resort failed too: say so (index only, never the text).
+        logger.warn({ err: err2 instanceof Error ? err2.message : String(err2), chunk: i + 1, of: chunks.length }, 'Channel ertesites: egy resz nem ment ki (formazva sem, sima szovegkent sem)')
       }
     }
   }
@@ -226,6 +231,17 @@ async function sendToChat(chatId: string, text: string): Promise<ChannelSendResu
     return { sent: false, reason: 'partial' }
   }
   return { sent: true }
+}
+
+// The plain-text form of a chunk formatForTelegram produced: its own tags
+// dropped (only those, so a literal "<5 perc>" in the text survives) and the
+// three entities its escapeHtml writes turned back into characters.
+export function telegramHtmlToPlain(html: string): string {
+  return html
+    .replace(/<\/?(?:b|i|s|code|pre)>|<code class="language-[^"]*">|<a href="[^"]*">|<\/a>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
 }
 
 // Backward-compatible alias
