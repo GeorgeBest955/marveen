@@ -1236,6 +1236,30 @@ export function ensureSharedClaudeOnboarded(dotClaudePath: string = join(homedir
   }
 }
 
+// #1904: the git toplevel that contains `dir`, or null when there is none
+// (not a repo, git missing, timeout, any error): the caller then stamps what it
+// stamped before. Runs git directly (no shell), bounded, with the inherited
+// GIT_DIR / GIT_WORK_TREE dropped so a hook-time env cannot point it at another
+// repo. `run` is the seam for tests.
+export function gitToplevelFor(
+  dir: string,
+  run: (dir: string) => string = (d) => {
+    const env = { ...process.env }
+    delete env.GIT_DIR
+    delete env.GIT_WORK_TREE
+    return execFileSync('git', ['-C', d, 'rev-parse', '--show-toplevel'], {
+      timeout: 3000, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], env,
+    })
+  },
+): string | null {
+  try {
+    const out = run(dir).trim()
+    return out ? out : null
+  } catch {
+    return null
+  }
+}
+
 // Pre-accept the PER-PROJECT first-run consent for an agent's working dir in
 // the config root the session will boot from. Claude Code keys the "Do you
 // trust the files in this folder?" dialog on projects[<cwd>].hasTrustDialogAccepted
@@ -1251,7 +1275,20 @@ export function ensureSharedClaudeOnboarded(dotClaudePath: string = join(homedir
 // symlinked homes) since Claude Code keys trust by the resolved path. Write is
 // atomic and only performed on actual change, so a live Claude Code process
 // racing us never sees a torn file and an already-stamped launch is a no-op.
-export function stampProjectTrustForDir(dotClaudePath: string, projectDir: string): boolean {
+//
+// #1904: it also stamps the dir's GIT TOPLEVEL. Claude Code
+// decides whether to honour a project's .claude/settings.json permissions.allow
+// by the trust of the git root, not of the cwd: with only agents/<name> stamped
+// it prints "Ignoring N permissions.allow entries ... this workspace has not
+// been trusted", so on a git-checkout install a strict-profile (dontAsk) agent
+// lost its whole allow-list and could only read. The toplevel comes from
+// gitToplevelFor; outside a git repo (or without git) it is null and the stamp
+// is what it was before.
+export function stampProjectTrustForDir(
+  dotClaudePath: string,
+  projectDir: string,
+  toplevel: string | null = gitToplevelFor(projectDir),
+): boolean {
   try {
     let data: Record<string, unknown> = {}
     if (existsSync(dotClaudePath)) {
@@ -1259,6 +1296,9 @@ export function stampProjectTrustForDir(dotClaudePath: string, projectDir: strin
     }
     const dirs = new Set<string>([projectDir])
     try { dirs.add(realpathSync(projectDir)) } catch { /* dir may not resolve yet */ }
+    // git prints the toplevel already resolved (symlinks followed, measured), which is
+    // the form Claude Code keys trust by, so it needs no realpath of its own.
+    if (toplevel) dirs.add(toplevel)
     const projects: Record<string, unknown> =
       (data.projects && typeof data.projects === 'object' && !Array.isArray(data.projects))
         ? data.projects as Record<string, unknown>
@@ -1284,7 +1324,7 @@ export function stampProjectTrustForDir(dotClaudePath: string, projectDir: strin
     if (!changed) return false
     data.projects = projects
     atomicWriteFileSync(dotClaudePath, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
-    logger.info({ dotClaudePath, projectDir }, 'project-trust: stamped folder-trust consent for agent dir')
+    logger.info({ dotClaudePath, projectDir, toplevel }, 'project-trust: stamped folder-trust consent for agent dir')
     return true
   } catch (err) {
     // Unparseable/unwritable file: leave it to Claude Code (same policy as
