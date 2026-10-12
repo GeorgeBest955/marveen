@@ -1773,23 +1773,31 @@ let marveenLastKeepaliveRespawn = 0
 export const KEEPALIVE_USELESS_RESPAWN_LIMIT = 2
 //
 // ISSUE1891 (b): "advanced" is the PRODUCER's own stamp, never store/.channel-keepalive.
-// The keepalive file is written by more than the producer: channels.sh touches it on
-// every (re)spawn and refreshKeepaliveFromInbound() warms it from inbound traffic. The
-// breaker used to read that file, so each respawn's own touch looked like "the producer
-// is back": the count reset, the breaker released, and on a Mac whose probe never ran
-// (no GUI login) a healthy session was respawned every 45 minutes, forever. The probe
-// now stamps store/.channel-keepalive-probe on every run; only that stamp counts.
-const KEEPALIVE_PRODUCER_STAMP = join(PROJECT_ROOT, 'store', '.channel-keepalive-probe')
+// The keepalive file has writers besides the producer: channels.sh touches it whenever
+// it starts the session (including the fallback below when respawn-pane cannot find
+// the pane) and refreshKeepaliveFromInbound() warms it from inbound traffic, so a
+// breaker judged by that file can be released by an event that says nothing about the
+// producer. The probe writes two stamps of its own:
+//   - .channel-keepalive-produced, ONLY next to its keepalive touch: the breaker
+//     counts and releases by this one. A run that starts and hangs (killed by the
+//     probe's own KEEPALIVEHANG923 timeout) or ends early does not write it -- the
+//     2026-09-23 shape still holds after two respawns (review of #1919).
+//   - .channel-keepalive-probe, at the start of every run: used only to word the
+//     alert, "the job does not run" vs "it runs but does not produce".
+const KEEPALIVE_PRODUCER_STAMP = join(PROJECT_ROOT, 'store', '.channel-keepalive-produced')
+const KEEPALIVE_RUN_STAMP = join(PROJECT_ROOT, 'store', '.channel-keepalive-probe')
 
 export interface KeepaliveLoopState {
   uselessRespawns: number
-  /** The producer stamp's mtime when we last respawned (null: no stamp then). */
+  /** The produced stamp's mtime when we last respawned (null: no stamp then). */
   producerAtLastRespawn: number | null
+  /** The run stamp's mtime when we last respawned -- only for the alert's wording. */
+  runAtLastRespawn: number | null
   /** Whether a keepalive respawn has happened since the last release (a baseline exists). */
   respawned: boolean
   alerted: boolean
 }
-export const KEEPALIVE_LOOP_INITIAL: KeepaliveLoopState = { uselessRespawns: 0, producerAtLastRespawn: null, respawned: false, alerted: false }
+export const KEEPALIVE_LOOP_INITIAL: KeepaliveLoopState = { uselessRespawns: 0, producerAtLastRespawn: null, runAtLastRespawn: null, respawned: false, alerted: false }
 let keepaliveLoop: KeepaliveLoopState = { ...KEEPALIVE_LOOP_INITIAL }
 
 /** Pure: has the producer run since our last keepalive respawn? No respawn yet = nothing to judge = yes. */
@@ -1816,11 +1824,13 @@ export type KeepaliveLoopDecision = 'respawn' | 'hold' | 'hold-and-alert'
  */
 export function decideKeepaliveLoop(
   state: KeepaliveLoopState,
-  obs: { pollerAlive: boolean; producerMtimeMs: number | null },
+  obs: { pollerAlive: boolean; producerMtimeMs: number | null; runMtimeMs?: number | null },
   limit: number = KEEPALIVE_USELESS_RESPAWN_LIMIT,
 ): { decision: KeepaliveLoopDecision; state: KeepaliveLoopState } {
-  const atRespawn = (useless: number): KeepaliveLoopState =>
-    ({ ...state, uselessRespawns: useless, producerAtLastRespawn: obs.producerMtimeMs, respawned: true })
+  const atRespawn = (useless: number): KeepaliveLoopState => ({
+    ...state, uselessRespawns: useless, producerAtLastRespawn: obs.producerMtimeMs,
+    runAtLastRespawn: obs.runMtimeMs ?? null, respawned: true,
+  })
   if (!obs.pollerAlive) return { decision: 'respawn', state: atRespawn(0) }
   const useless = keepaliveProducerAdvanced(state, obs.producerMtimeMs) ? 0 : state.uselessRespawns + 1
   if (useless < limit) return { decision: 'respawn', state: atRespawn(useless) }
@@ -1828,6 +1838,16 @@ export function decideKeepaliveLoop(
     decision: state.alerted ? 'hold' : 'hold-and-alert',
     state: { ...state, uselessRespawns: useless, alerted: true },
   }
+}
+
+/**
+ * Pure, for the hold alert's wording only: did the probe job RUN since our last
+ * respawn (its run stamp moved), although it produced nothing? 'not-running' asks the
+ * operator to start the job; 'not-producing' points at its log.
+ */
+export function keepaliveHoldReason(state: KeepaliveLoopState, runMtimeMs: number | null): 'not-running' | 'not-producing' {
+  if (runMtimeMs == null) return 'not-running'
+  return state.runAtLastRespawn == null || runMtimeMs > state.runAtLastRespawn ? 'not-producing' : 'not-running'
 }
 
 /**
@@ -1850,6 +1870,10 @@ export function keepaliveProducerRemedy(platform: string, serviceId: string, uid
 
 function readProducerStampMtime(): number | null {
   try { return statSync(KEEPALIVE_PRODUCER_STAMP).mtimeMs } catch { return null }
+}
+
+function readRunStampMtime(): number | null {
+  try { return statSync(KEEPALIVE_RUN_STAMP).mtimeMs } catch { return null }
 }
 
 /**
@@ -1959,8 +1983,8 @@ function checkMainKeepaliveStaleness(): void {
   const rel = releaseKeepaliveLoop(keepaliveLoop, producerMtimeMs)
   keepaliveLoop = rel.state
   if (rel.released) {
-    logger.info('Keepalive producer ran again -- loop breaker released')
-    sendAlert(`✅ A keep-alive jelző (szonda) újra fut, a fő channel figyelője visszaállt a normál működésre.`)
+    logger.info('Keepalive producer produced again -- loop breaker released')
+    sendAlert(`✅ A keep-alive jelző (szonda) újra termel, a fő channel figyelője visszaállt a normál működésre.`)
   }
 
   // GROUND-TRUTH SHORTCUT (2026-06-01 21:18 incident): if the channel
@@ -2027,13 +2051,18 @@ function checkMainKeepaliveStaleness(): void {
   }
   const ageMin = Math.round((ageMs ?? 0) / 60000)
   // ISSUE1891 (b): the producer's stamp, NOT the keepalive mtime, judges a respawn.
-  const loop = decideKeepaliveLoop(keepaliveLoop, { pollerAlive, producerMtimeMs })
+  const runMtimeMs = readRunStampMtime()
+  const holdReason = keepaliveHoldReason(keepaliveLoop, runMtimeMs)
+  const loop = decideKeepaliveLoop(keepaliveLoop, { pollerAlive, producerMtimeMs, runMtimeMs })
   keepaliveLoop = loop.state
   if (loop.decision !== 'respawn') {
     if (loop.decision === 'hold-and-alert') {
       const fix = keepaliveProducerRemedy(process.platform, SERVICE_ID, process.getuid ? process.getuid() : 0, homedir())
-      logger.warn({ ageMs, uselessRespawns: loop.state.uselessRespawns, producerMtimeMs }, 'Keepalive loop breaker: the keepalive producer did not run since our respawns while the poller is alive -- holding further respawns (KEEPALIVELOOP923, ISSUE1891)')
-      sendAlert(`⚠️ A fő channel keep-alive ${ageMin} perce nem frissül, de a Telegram-poller él, és ${loop.state.uselessRespawns} újraindítás óta a jelző (szonda) egyszer sem futott. További újraindítást NEM csinálok (csak a beszélgetést vinné el). A jelző: ${fix.job}. Indítsd el: ${fix.command} (macOS-en a GUI-bejelentkezés egy terminaljából). Napló: store/channel-keepalive-probe.log. Ha a jelző újra fut, a figyelő magától visszaáll, és szólok.`)
+      logger.warn({ ageMs, uselessRespawns: loop.state.uselessRespawns, producerMtimeMs, runMtimeMs, holdReason }, 'Keepalive loop breaker: the keepalive producer did not produce since our respawns while the poller is alive -- holding further respawns (KEEPALIVELOOP923, ISSUE1891)')
+      const head = `⚠️ A fő channel keep-alive ${ageMin} perce nem frissül, de a Telegram-poller él, és ${loop.state.uselessRespawns} újraindítás óta a jelző (szonda) nem frissítette. További újraindítást NEM csinálok (csak a beszélgetést vinné el). A jelző: ${fix.job}.`
+      sendAlert(holdReason === 'not-running'
+        ? `${head} A job nem fut. Indítsd el: ${fix.command} (macOS-en a GUI-bejelentkezés egy terminaljából). Ha a jelző újra termel, a figyelő magától visszaáll, és szólok.`
+        : `${head} A job fut, de nem termel (elakad vagy nem találja a pollert). Nézd meg a naplóját: store/channel-keepalive-probe.log. Ha a jelző újra termel, a figyelő magától visszaáll, és szólok.`)
     }
     return
   }
