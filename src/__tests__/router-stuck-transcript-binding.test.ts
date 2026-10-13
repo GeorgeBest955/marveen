@@ -200,7 +200,7 @@ describe('router: a live loop past the 2 h ceiling alerts, and says the transcri
     vi.restoreAllMocks()
   })
 
-  it('busy for 2.5 h, the transcript written every 5 min: silent for 2 h, then exactly one MOZOG alert', async () => {
+  it('busy for 2.5 h, the transcript written every 5 min: silent for 2 h, then exactly one MOVING alert', async () => {
     const f = sessionFile('looper1')
     writeFileSync(f, '')
     mockGetPendingMessages.mockReturnValue([pendingFor('looper1')])
@@ -216,8 +216,8 @@ describe('router: a live loop past the 2 h ceiling alerts, and says the transcri
     }
     expect(alertedAt).toEqual([125])
     const [text] = stuckAlerts('looper1')
-    expect(text).toContain('A transzkriptje közben MOZOG (utolsó haladás 1 perce)')
-    expect(text).toContain('125 perce DOLGOZIK (busy)')
+    expect(text).toContain('its transcript is still MOVING (last progress 1 min ago)')
+    expect(text).toContain('BUSY for 125 min')
   })
 })
 

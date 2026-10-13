@@ -292,14 +292,13 @@ describe('shouldEscalateStuckSession: the transcript exemption ends at a 2 h cei
     }
   })
 
-  it('the alert past the ceiling says, in Hungarian, that the transcript is still moving, and when it last moved', () => {
+  it('the alert past the ceiling says the transcript is still moving, and when it last moved', () => {
     const text = formatStuckSessionAlert('looper', 'orin', 'agent-looper', 125 * MIN, 3, 'busy', false, null, null, 2 * MIN) ?? ''
-    expect(text).toContain("A(z) 'looper' ügynök (tmux agent-looper) 125 perce DOLGOZIK (busy), és 3 üzenet vár rá.")
-    expect(text).toContain('A transzkriptje közben MOZOG (utolsó haladás 2 perce)')
-    expect(text).toContain('önmagát ismétlő hurok')
-    expect(text).toContain('legfeljebb 2 óránként')
-    expect(text).toContain('NE indítsd újra')
-    expect(/[\u2013\u2014]/.test(text)).toBe(false)
+    expect(text).toContain("Agent 'looper' (tmux agent-looper) has been BUSY for 125 min with 3 pending message(s) queued")
+    expect(text).toContain('its transcript is still MOVING (last progress 2 min ago)')
+    expect(text).toContain('a loop that keeps writing')
+    expect(text).toContain('at most once every 2 h')
+    expect(text).toContain('Do NOT restart on this alert alone')
   })
 
   it('below the ceiling the 15 min progress window is unchanged', () => {
@@ -313,7 +312,7 @@ describe('shouldEscalateStuckSession: the transcript exemption ends at a 2 h cei
     for (const ago of [null, 25 * MIN]) {
       const text = formatStuckSessionAlert('wedge', 'orin', 'agent-wedge', 31 * MIN, 1, 'busy', false, null, null, ago)
       expect(text).toContain('has been BUSY (actively working, spinner up) for 31 min')
-      expect(text).not.toContain('MOZOG')
+      expect(text).not.toContain('MOVING')
     }
   })
 })

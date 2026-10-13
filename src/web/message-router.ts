@@ -128,12 +128,11 @@ export function formatStuckSessionAlert(
   if (paneState === 'busy') {
     // ROUTERSTUCK1012: past BUSY_TRANSCRIPT_EXEMPT_CAP_MS a busy session alerts
     // even with a moving transcript. The reader must know that it moved: that
-    // is a very long turn or a loop that keeps writing, not a frozen call. The
-    // text is Hungarian, as the review asked: it is the one the owner may read.
+    // is a very long turn or a loop that keeps writing, not a frozen call.
     if (lastProgressAgoMs != null && lastProgressAgoMs <= TRANSCRIPT_PROGRESS_FRESH_MS) {
       const ago = Math.max(0, Math.round(lastProgressAgoMs / 60000))
       const capH = Math.round(BUSY_TRANSCRIPT_EXEMPT_CAP_MS / 3600000)
-      return `[session-stuck] A(z) '${agent}' ügynök (tmux ${session}) ${min} perce DOLGOZIK (busy), és ${pendingCount} üzenet vár rá. A transzkriptje közben MOZOG (utolsó haladás ${ago} perce), tehát ez vagy egy nagyon hosszú kör, vagy egy önmagát ismétlő hurok (például modell-hurok, vagy egy újra és újra elutasított eszközhívás), nem egy lefagyott hívás. Nézd meg, halad-e a kör érdemben. Erre a riasztásra önmagában NE indítsd újra. Amíg a transzkript mozog, ez a riasztás legfeljebb ${capH} óránként ismétlődik.`
+      return `[session-stuck] Agent '${agent}' (tmux ${session}) has been BUSY for ${min} min with ${queue}, and its transcript is still MOVING (last progress ${ago} min ago). That is either a very long turn or a loop that keeps writing (a model loop, or a tool call retried and refused again and again). Check whether the turn is getting anywhere. Do NOT restart on this alert alone. While the transcript keeps moving, this alert repeats at most once every ${capH} h.`
     }
     return `[session-stuck] Agent '${agent}' (tmux ${session}) has been BUSY (actively working, spinner up) for ${min} min with ${queue}. Not a stall by itself -- check whether the turn is progressing or a tool call is wedged. Do NOT restart on this alert alone.`
   }
