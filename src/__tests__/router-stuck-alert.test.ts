@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { formatStuckSessionAlert, quotaWallEscalation, shouldEscalateStuckSession, type QuotaWallAlertRecord } from '../web/message-router.js'
+import { BUSY_TRANSCRIPT_EXEMPT_CAP_MS, formatStuckSessionAlert, quotaWallEscalation, shouldEscalateStuckSession, type QuotaWallAlertRecord } from '../web/message-router.js'
 import { detectPaneState, detectQuotaWall } from '../pane-state.js'
 
 const MAIN = 'marveen'
@@ -265,5 +265,54 @@ describe('shouldEscalateStuckSession: past the busy watchdog, the transcript dec
 
   it('a fresh transcript never makes a busy pane alert before the watchdog', () => {
     expect(shouldEscalateStuckSession(detectPaneState(BUSY_PANE), 29 * MIN, NOW - 60 * MIN, NOW)).toBe(false)
+  })
+})
+
+// ROUTERSTUCK1012, review of #1914: the transcript exemption has a ceiling. A
+// session that keeps writing (a model loop, a tool call refused by a hook again
+// and again) produces progress entries forever; without a ceiling it would
+// never alert while its queue grows.
+describe('shouldEscalateStuckSession: the transcript exemption ends at a 2 h ceiling (ROUTERSTUCK1012)', () => {
+  const NOW = Date.UTC(2026, 9, 13, 20, 0, 0)
+
+  it('the ceiling is 2 hours', () => {
+    expect(BUSY_TRANSCRIPT_EXEMPT_CAP_MS).toBe(120 * MIN)
+  })
+
+  it('a live loop (busy, transcript moving a minute ago) is exempt up to 2 h and alerts past it', () => {
+    expect(shouldEscalateStuckSession(detectPaneState(BUSY_PANE), 120 * MIN, NOW - MIN, NOW)).toBe(false)
+    expect(shouldEscalateStuckSession(detectPaneState(BUSY_PANE), 120 * MIN + 1, NOW - MIN, NOW)).toBe(true)
+    expect(shouldEscalateStuckSession(detectPaneState(BUSY_PANE), 240 * MIN, NOW, NOW)).toBe(true)
+  })
+
+  it('without an exemption the parent\'s 30 min rule is unchanged: quiet or unreadable transcript alerts past 30 min, never before', () => {
+    for (const p of [null, NOW - 25 * MIN]) {
+      expect(shouldEscalateStuckSession(detectPaneState(BUSY_PANE), 30 * MIN, p, NOW)).toBe(false)
+      expect(shouldEscalateStuckSession(detectPaneState(BUSY_PANE), 31 * MIN, p, NOW)).toBe(true)
+    }
+  })
+
+  it('the alert past the ceiling says the transcript is still moving, and when it last moved', () => {
+    const text = formatStuckSessionAlert('looper', 'orin', 'agent-looper', 125 * MIN, 3, 'busy', false, null, null, 2 * MIN) ?? ''
+    expect(text).toContain("Agent 'looper' (tmux agent-looper) has been BUSY for 125 min with 3 pending message(s) queued")
+    expect(text).toContain('its transcript is still MOVING (last progress 2 min ago)')
+    expect(text).toContain('a loop that keeps writing')
+    expect(text).toContain('at most once every 2 h')
+    expect(text).toContain('Do NOT restart on this alert alone')
+  })
+
+  it('below the ceiling the 15 min progress window is unchanged', () => {
+    for (const stuck of [31, 90, 120]) {
+      expect(shouldEscalateStuckSession(detectPaneState(BUSY_PANE), stuck * MIN, NOW - 15 * MIN, NOW)).toBe(false)
+      expect(shouldEscalateStuckSession(detectPaneState(BUSY_PANE), stuck * MIN, NOW - 15 * MIN - 1, NOW)).toBe(true)
+    }
+  })
+
+  it('a quiet or unknown transcript keeps the plain busy alert', () => {
+    for (const ago of [null, 25 * MIN]) {
+      const text = formatStuckSessionAlert('wedge', 'orin', 'agent-wedge', 31 * MIN, 1, 'busy', false, null, null, ago)
+      expect(text).toContain('has been BUSY (actively working, spinner up) for 31 min')
+      expect(text).not.toContain('MOVING')
+    }
   })
 })
