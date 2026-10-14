@@ -1049,6 +1049,8 @@ window._i18n.en = {
   'agents.model.no_data':			'No data for this agent.',
   'agents.model.ok_agents':			'OK: {list}',
   'agents.reauth.reason':			'Re-authentication required',
+  'agents.sharedEnvAuth.label':			'Shared env auth key',
+  'agents.sharedEnvAuth.tip':			'The env block of the shared ~/.claude/settings.json copies this key into this agent, so it may run on that key or endpoint instead of its own token.',
   'agents.soul_md_generating':			'Generating SOUL.md...',
   'agents.status.online':          'Online',
   'agents.status.offline':         'Offline',

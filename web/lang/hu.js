@@ -362,6 +362,8 @@ window._i18n.hu = {
   'agents.status.running':         'Fut',
   'agents.status.stopped':         'Leállva',
   'agents.reauth.reason':          'Újrabejelentkezés szükséges',
+  'agents.sharedEnvAuth.label':    'Közös env auth-kulcs',
+  'agents.sharedEnvAuth.tip':      'A közös ~/.claude/settings.json env blokkja ezt a kulcsot átmásolja ebbe az ügynökbe, így az a saját tokenje helyett ezzel a kulccsal vagy végponttal futhat.',
   'agents.btn.conversation':       'Beszélgetés',
   'agents.model.analyzing':        'Elemzés...',
   'agents.model.no_data':          'Nincs adat ehhez az ágenshez.',

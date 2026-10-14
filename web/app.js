@@ -3802,6 +3802,10 @@ function renderAgents() {
           <span class="agent-reauth-reason">${escapeHtml(agent.reauthReason || t('agents.reauth.reason'))}</span>
           <button class="btn-danger btn-compact agent-login-btn" data-phase="start">${t('agents.btn.login')}</button>
         </div>` : ''}
+      ${Array.isArray(agent.sharedEnvAuthKeys) && agent.sharedEnvAuthKeys.length ? `
+        <div class="agent-sharedenv-banner" title="${escapeHtml(t('agents.sharedEnvAuth.tip'))}">
+          <span class="agent-sharedenv-text">${escapeHtml(t('agents.sharedEnvAuth.label'))}: ${escapeHtml(agent.sharedEnvAuthKeys.join(', '))}</span>
+        </div>` : ''}
       <div class="agent-card-actions">
         <button class="btn-secondary btn-compact agent-conversation-btn" title="${t('agents.btn.conversation')}">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
