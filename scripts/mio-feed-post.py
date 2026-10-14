@@ -17,6 +17,12 @@ TARTALMA ugyanazokon a tartalmi kapukon megy at, mint a torzs (gondolatjel, nem-
 karakter, agens-nev), mert ugyanugy nyilvanos; a hossz-kapu ra nem vonatkozik. A rossz
 fajl HELYBEN all meg (kiterjesztes, meret, UTF-8, ures), nem a szerver 413/415-je fogja meg.
 Csatolmany nelkul a kuldes BAJTRA a regi JSON-keres (scripts/__tests__/mio-feed-post.test.py).
+
+KET SZUK KIVETEL (MIOFEEDMARVEEN1014, Marveen dontese): a "Marveen" TERMEKNEV a csatolmany
+tartalmaban es neveben nem bukik az agens-nev kapun (egy termek-leiras kenytelen kimondani);
+a cimben es a torzsben igen, valtozatlanul. A magyar idezojel (U+201E es U+201D) mindenhol
+atmegy; minden mas nem-latin karakter tovabbra is bukik. Futasonkenti felulbiralo kapcsolo
+SZANDEKOSAN nincs.
 """
 import hashlib, json, os, re, sys, urllib.request, urllib.error, uuid
 
@@ -32,6 +38,8 @@ TITLE_MIN, TITLE_MAX = 3, 200
 # 413 file_too_large-dzsel tovabbra is megfogja; ez itt elo-ellenorzes.
 ATTACH_MAX_BYTES = 1_000_000
 ATTACH_EXT = ".md"
+# A csatolmany nev-kapujabol kivett nevek (lasd a modul-docstringet). Csak itt, csak ez.
+ATTACH_NEV_KIVETEL = ("Marveen",)
 AGENT_NEVEK = ("Marveen", "Mira", "Orsi", "Samu", "Dani", "Geri", "Boni", "Iris", "Zara",
                "Tomi", "Vera", "Jumanji", "Deeper", "Qwen")
 
@@ -56,15 +64,17 @@ def _jel_kapuk(egyben: str) -> list:
     for ent in ("&mdash;", "&ndash;", "&#8212;", "&#8211;"):
         if ent in egyben:
             bad.append(f"gondolatjel-entitas ({ent})")
-    ek = set("áéíóöőúüűÁÉÍÓÖŐÚÜŰ")
+    ek = set("áéíóöőúüűÁÉÍÓÖŐÚÜŰ\u201e\u201d")  # + a magyar idezojel-par
     idegen = sorted({c for c in egyben if ord(c) > 127 and c not in ek})
     if idegen:
         bad.append("nem-latin karakter: " + ", ".join(f"U+{ord(c):04X}" for c in idegen))
     return bad
 
-def _nev_kapuk(egyben: str) -> list:
+def _nev_kapuk(egyben: str, kivetel: tuple = ()) -> list:
     bad = []
     for n in AGENT_NEVEK:
+        if n in kivetel:
+            continue
         m = re.search(_nev_minta(n), egyben)
         if m:
             i, j = m.span()
@@ -105,7 +115,7 @@ def attachment_gates(path: str):
     except UnicodeDecodeError:
         return name, data, ["a csatolmany nem ervenyes UTF-8 szoveg"]
     egyben = name + "\n" + tartalom
-    return name, data, [f"csatolmany: {p}" for p in _jel_kapuk(egyben) + _nev_kapuk(egyben)]
+    return name, data, [f"csatolmany: {p}" for p in _jel_kapuk(egyben) + _nev_kapuk(egyben, ATTACH_NEV_KIVETEL)]
 
 def multipart(fields: list, file_name: str, file_bytes: bytes):
     """(torzs, content-type) a #312-es alakhoz: szoveges mezok + EGY "file" resz."""

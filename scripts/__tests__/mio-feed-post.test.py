@@ -229,5 +229,62 @@ check("attach: the file part is exactly the file's bytes", fp is not None and fp
 rc, out, *_ = run([CHANNEL, TITLE, BODY, "--attach", GOOD, "--confirm"], http_error=415)
 check("attach: an HTTP error -> exit 5", rc == 5 and out.startswith("HTTP 415\n"))
 
+# ---------------------------------------------------------------------------
+# 5. MIOFEEDMARVEEN1014: the two narrow exceptions
+#    - the product name "Marveen" passes the agent-name gate in the attachment's
+#      content and name ONLY; title and body keep the gate;
+#    - the Hungarian quote pair (U+201E, U+201D) passes everywhere; every other
+#      non-Latin character still fails.
+# ---------------------------------------------------------------------------
+def dry(args):
+    """Run without --confirm; returns (rc, stderr, requests, vault reads)."""
+    rc, out, err, sent, vc = run(args)
+    return rc, err, sent, vc
+
+
+QTITLE = fpath("qcim.txt", "\u201eIdezett\u201d cim\n")
+QBODY = fpath("qtorzs.txt", "A torzsben \u201eidezojel\u201d all.\n")
+MTITLE = fpath("mcim.txt", "A Marveen flotta\n")
+MBODY = fpath("mtorzs.txt", "Ezt a Marveen flotta irta.\n")
+MBODY_RAG = fpath("mtorzs-rag.txt", "Kerdezd a Marveent errol.\n")
+EMOJI_BODY = fpath("etorzs.txt", "Egy emoji \U0001F600 itt.\n")
+ARROW_TITLE = fpath("ncim.txt", "A \u2192 B\n")
+
+for label, path in (
+    ("product name in the content", fpath("termek.md", "# Hangvezerles\n\nA Marveen flotta hangja.\n")),
+    ("product name with a suffix in the content", fpath("rag.md", "Kerdezd a Marveent, vagy a Marveennel beszelj.\n")),
+    ("product name in a compound in the content", fpath("osszetett.md", "A Marveen-eszkozkulcs kell hozza.\n")),
+    ("product name in the file name", fpath("Marveen-hangvezerles.md", "# Hangvezerles\n")),
+    ("Hungarian quotes in the content", fpath("idezet.md", "A \u201ehangvezerles\u201d szo.\n")),
+):
+    rc, err, sent, vc = dry([CHANNEL, TITLE, BODY, "--attach", path])
+    check(f"exception: {label} passes the local check (exit 3, nothing sent)", rc == 3 and sent == [] and vc == [])
+
+refused("another agent name in the content (Mira)", fpath("mira.md", "Ezt Mira irta.\n"), "csatolmany: agens-nev a szovegben: Mira")
+refused("another agent name in the file name (Mira)", fpath("Mira-jegyzet.md", MD), "csatolmany: agens-nev a szovegben: Mira")
+refused("another agent name next to the product name", fpath("vegyes.md", "A Marveen flotta, Samu irta.\n"), "csatolmany: agens-nev a szovegben: Samu")
+refused("emoji in the content", fpath("emoji.md", "Egy emoji \U0001F600 itt.\n"), "csatolmany: nem-latin karakter: U+1F600")
+refused("a quote that is not the Hungarian pair", fpath("angol.md", "An \u201cEnglish\u201d quote.\n"), "csatolmany: nem-latin karakter: U+201C")
+
+for label, args, needle in (
+    ("product name in the title", [CHANNEL, MTITLE, BODY], "agens-nev a szovegben: Marveen"),
+    ("product name in the body", [CHANNEL, TITLE, MBODY], "agens-nev a szovegben: Marveen"),
+    ("product name with a suffix in the body", [CHANNEL, TITLE, MBODY_RAG], "agens-nev a szovegben: Marveen"),
+    ("product name in the body, even with an attachment", [CHANNEL, TITLE, MBODY, "--attach", GOOD], "agens-nev a szovegben: Marveen"),
+    ("emoji in the body", [CHANNEL, TITLE, EMOJI_BODY], "nem-latin karakter: U+1F600"),
+    ("arrow in the title", [CHANNEL, ARROW_TITLE, BODY], "nem-latin karakter: U+2192"),
+):
+    rc, err, sent, vc = dry(args)
+    check(f"no exception: {label} -> exit 1, nothing sent", rc == 1 and sent == [] and vc == [])
+    check(f"no exception: {label} -> names the reason", needle in err)
+
+rc, err, sent, vc = dry([CHANNEL, QTITLE, QBODY])
+check("quotes: the Hungarian pair passes in the title and the body (exit 3)", rc == 3 and sent == [])
+rc, out, err, sent, vc = run([CHANNEL, QTITLE, QBODY, "--confirm"])
+check("quotes: the JSON request carries them as \\u escapes, nothing else changed",
+      rc == 0 and len(sent) == 1 and sent[0]["data"] == (
+          b'{"channel_id": "11111111-2222-4333-8444-555555555555", "title": "\\u201eIdezett\\u201d cim", '
+          b'"content": "A torzsben \\u201eidezojel\\u201d all."}'))
+
 print(f"\n{'ALL PASS' if not failed else str(len(failed)) + ' FAILED'}")
 sys.exit(1 if failed else 0)
