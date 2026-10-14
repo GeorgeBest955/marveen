@@ -66,7 +66,7 @@ describe('authKeysInEnv', () => {
 })
 
 describe('start-time warning in the isolated provisioning', () => {
-  const warnCalls = (spy: ReturnType<typeof vi.spyOn>) =>
+  const warnCalls = (spy: { mock: { calls: unknown[][] } }) =>
     spy.mock.calls.filter((c) => c[1] === MSG).map((c) => c[0] as { name: string; keys: string[] })
 
   it.each(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN'])(
@@ -128,6 +128,15 @@ describe('sharedEnvAuthKeysCopiedTo (the dashboard field)', () => {
     ensureIsolatedChannelConfigDir('ag', 'telegram')
     CONFIGURED_DIR = join(SANDBOX, 'own-dir')
     expect(sharedEnvAuthKeysCopiedTo('ag')).toEqual([])
+  })
+
+  it('does not report a key the shared file gained after this agent last started', () => {
+    writeShared({ env: { OTHER: 'x' } })
+    ensureIsolatedChannelConfigDir('ag', 'telegram')
+    writeShared({ env: { OTHER: 'x', ANTHROPIC_API_KEY: SECRET } })
+    expect(sharedEnvAuthKeysCopiedTo('ag')).toEqual([])
+    ensureIsolatedChannelConfigDir('ag', 'telegram')
+    expect(sharedEnvAuthKeysCopiedTo('ag')).toEqual(['ANTHROPIC_API_KEY'])
   })
 
   it('does not report an auth key the agent holds on its own', () => {
