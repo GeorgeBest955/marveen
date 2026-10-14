@@ -260,8 +260,17 @@ for label, path in (
     rc, err, sent, vc = dry([CHANNEL, TITLE, BODY, "--attach", path])
     check(f"exception: {label} passes the local check (exit 3, nothing sent)", rc == 3 and sent == [] and vc == [])
 
-refused("another agent name in the content (Mira)", fpath("mira.md", "Ezt Mira irta.\n"), "csatolmany: agens-nev a szovegben: Mira")
-refused("another agent name in the file name (Mira)", fpath("Mira-jegyzet.md", MD), "csatolmany: agens-nev a szovegben: Mira")
+# Every OTHER agent name still fails in the attachment, in the content and in the file
+# name: the exception must not widen silently to a second name. The list comes from the
+# script itself, so a name added later is covered too.
+_names = load().AGENT_NEVEK
+_others = [n for n in _names if n != "Marveen"]
+check("exception: the script's agent-name list still holds Marveen and at least 13 others",
+      "Marveen" in _names and len(_others) >= 13)
+for n in _others:
+    refused(f"agent name {n} in the content", fpath(f"tartalom-{n.lower()}.md", f"Ezt {n} irta.\n"),
+            f"csatolmany: agens-nev a szovegben: {n}")
+    refused(f"agent name {n} in the file name", fpath(f"{n}-jegyzet.md", MD), f"csatolmany: agens-nev a szovegben: {n}")
 refused("another agent name next to the product name", fpath("vegyes.md", "A Marveen flotta, Samu irta.\n"), "csatolmany: agens-nev a szovegben: Samu")
 refused("emoji in the content", fpath("emoji.md", "Egy emoji \U0001F600 itt.\n"), "csatolmany: nem-latin karakter: U+1F600")
 refused("a quote that is not the Hungarian pair", fpath("angol.md", "An \u201cEnglish\u201d quote.\n"), "csatolmany: nem-latin karakter: U+201C")
