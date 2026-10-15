@@ -122,7 +122,7 @@ function spawnWithEnv(cmd: string, args: string[], env: Record<string, string>):
 // it carries the plugin marker, as a real poller does, because both candidate sources require it (cf075d41).
 const pluginRoot = join(tmp, 'plugins', 'cache', 'official', 'telegram', '0.0.1')
 // node, not /bin/sleep: see the macOS note in the header.
-const poller = () => spawnWithEnv(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
+const poller = () => spawnWithEnv(process.execPath, ['-e', 'setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 300000)'], { TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
 function fakeTmuxPrints(body: string): void {
   writeFileSync(fakeTmux, `#!/bin/sh\n${body}\n`)
   chmodSync(fakeTmux, 0o755)

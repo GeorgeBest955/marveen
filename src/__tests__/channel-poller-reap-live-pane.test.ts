@@ -42,7 +42,7 @@ const kids: number[] = []
 const pluginRoot = join(tmp, 'plugins', 'cache', 'official', 'telegram', '0.0.1')
 function victim(): number {
   // node, not /bin/sleep: see the macOS note in the header.
-  const p = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+  const p = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 300000)'], {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env, TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot },

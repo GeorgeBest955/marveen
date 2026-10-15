@@ -91,7 +91,7 @@ function spawnWith(cmd: string, args: string[], extra: Record<string, string>): 
   kids.push(p.pid!)
   return p.pid!
 }
-const nodeJob = (extra: Record<string, string>) => spawnWith(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], extra)
+const nodeJob = (extra: Record<string, string>) => spawnWith(process.execPath, ['-e', 'setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 300000)'], extra)
 function fakeTmuxPrints(body: string): void {
   writeFileSync(fakeTmux, `#!/bin/sh\n${body}\n`)
   chmodSync(fakeTmux, 0o755)
@@ -107,7 +107,7 @@ afterAll(() => {
 
 describe('cf075d41 reapChannelOrphans on real processes', () => {
   it('(i) a stale bot.pid naming a live process that is not a plugin process: NOT stopped', async () => {
-    const stranger = spawnWith(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {})
+    const stranger = spawnWith(process.execPath, ['-e', 'setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 300000)'], {})
     await sleep(150)
     writeFileSync(join(chanDir, 'bot.pid'), String(stranger))
     fakeTmuxPrints('echo 4242')
@@ -143,7 +143,7 @@ describe('cf075d41 reapChannelOrphans on real processes', () => {
     clearBotPid()
     const scanned = nodeJob({ TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
     // node, not /bin/sleep: see the macOS note in the header.
-    const listed = spawnWith(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
+    const listed = spawnWith(process.execPath, ['-e', 'setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 300000)'], { TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
     await sleep(300)
     writeFileSync(join(chanDir, 'bot.pid'), String(listed))
     fakeTmuxPrints('echo 4242')
