@@ -10,6 +10,12 @@
 //   (iii) a detached `claude --channels` that sits ABOVE a live pane leader
 //         (the orphan test only looks up from the claude);
 // and (iv), the positive control, a real orphan is still stopped.
+//
+// macOS (PR1829MACRED1015): the stand-in poller is a node job, never /bin/sleep.
+// On macOS `ps axeww` does not show the environment of an Apple-signed binary
+// (/bin/sleep, /bin/bash, even a copy outside /bin), so such a stand-in never
+// carries the plugin markers the reaper requires and is never a candidate.
+// Measured on macOS 26.5. Real pollers are bun/node, whose environment ps shows.
 // The real-process cases assert liveness FIRST, so on the code without the
 // guards they fail because the process was stopped, not on a missing export.
 // A real tmux server is never touched: a fake tmux answers every query.
@@ -101,7 +107,7 @@ afterAll(() => {
 
 describe('cf075d41 reapChannelOrphans on real processes', () => {
   it('(i) a stale bot.pid naming a live process that is not a plugin process: NOT stopped', async () => {
-    const stranger = spawnWith('/bin/sleep', ['300'], {})
+    const stranger = spawnWith(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {})
     await sleep(150)
     writeFileSync(join(chanDir, 'bot.pid'), String(stranger))
     fakeTmuxPrints('echo 4242')
@@ -136,7 +142,8 @@ describe('cf075d41 reapChannelOrphans on real processes', () => {
   it('(iv) positive control: a real orphan poller (state dir AND plugin root) is still stopped, via the env scan and via bot.pid', async () => {
     clearBotPid()
     const scanned = nodeJob({ TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
-    const listed = spawnWith('/bin/sleep', ['300'], { TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
+    // node, not /bin/sleep: see the macOS note in the header.
+    const listed = spawnWith(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
     await sleep(300)
     writeFileSync(join(chanDir, 'bot.pid'), String(listed))
     fakeTmuxPrints('echo 4242')

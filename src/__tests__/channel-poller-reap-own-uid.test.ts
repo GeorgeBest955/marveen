@@ -1,6 +1,12 @@
 // Card 35ea0375: the channel reapers signal only processes of the dashboard's
 // own uid, and log each signal's outcome by kind.
 //
+// macOS (PR1829MACRED1015): the stand-in poller is a node job, never /bin/sleep.
+// On macOS `ps axeww` does not show the environment of an Apple-signed binary
+// (/bin/sleep, /bin/bash, even a copy outside /bin), so such a stand-in never
+// carries the plugin markers the reaper requires and is never a candidate.
+// Measured on macOS 26.5. Real pollers are bun/node, whose environment ps shows.
+//
 // Measured case: the process tables are host-wide, so a detached
 // `claude --channels` of ANOTHER user on the same host passed the orphan test.
 // Its SIGTERM failed with EPERM, the catch took that for "already gone", and the
@@ -112,10 +118,11 @@ function spawnWithEnv(cmd: string, args: string[], env: Record<string, string>):
   kids.push(p.pid!)
   return p.pid!
 }
-// bot.pid names it, so the runtime check of the env scan does not apply (a `sleep` stands in for the poller);
+// bot.pid names it, so the runtime check of the env scan does not apply (a node job stands in for the poller);
 // it carries the plugin marker, as a real poller does, because both candidate sources require it (cf075d41).
 const pluginRoot = join(tmp, 'plugins', 'cache', 'official', 'telegram', '0.0.1')
-const poller = () => spawnWithEnv('/bin/sleep', ['300'], { TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
+// node, not /bin/sleep: see the macOS note in the header.
+const poller = () => spawnWithEnv(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { TELEGRAM_STATE_DIR: chanDir, CLAUDE_PLUGIN_ROOT: pluginRoot })
 function fakeTmuxPrints(body: string): void {
   writeFileSync(fakeTmux, `#!/bin/sh\n${body}\n`)
   chmodSync(fakeTmux, 0o755)
