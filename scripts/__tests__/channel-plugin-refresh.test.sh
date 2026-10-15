@@ -27,6 +27,12 @@ trap 'rm -rf "$TMPD"' EXIT
 cat > "$TMPD/claude" <<'EOF'
 #!/bin/bash
 echo "${CLAUDE_CONFIG_DIR}|$*" >> "$FAKE_LOG"
+# FAKE_READ_STDIN=1: record what the child could read on stdin (must be nothing).
+if [ -n "${FAKE_READ_STDIN:-}" ]; then
+  l=""; IFS= read -r -t 2 l || true; echo "stdin=[$l]" >> "$FAKE_LOG.stdin"
+fi
+# FAKE_SLEEP=<s>: hang like a stuck `claude plugin ...` (exec, so a kill ends it).
+[ -n "${FAKE_SLEEP:-}" ] && exec sleep "$FAKE_SLEEP"
 echo "${CLAUDE_CONFIG_DIR}|tg=${TELEGRAM_BOT_TOKEN-unset}|sb=${SLACK_BOT_TOKEN-unset}|sa=${SLACK_APP_TOKEN-unset}|dc=${DISCORD_BOT_TOKEN-unset}|tgs=${TELEGRAM_STATE_DIR-unset}|sls=${SLACK_STATE_DIR-unset}" >> "$FAKE_ENV"
 if [ -n "${FAKE_FAIL:-}" ]; then
   case "$CLAUDE_CONFIG_DIR" in *"$FAKE_FAIL"*)
@@ -142,6 +148,62 @@ fresh
 reg "$HOME_D/.claude" "$REG_WITH"
 OUT="$(FAKE_FAIL="/home/" bash -c 'set -e; (. "$1" && CHANNEL_PLUGIN_CLAUDE_BIN="$2" refresh_channel_plugins "$3" "$4") || true; echo after' _ "$LIB" "$TMPD/claude" "$INST" "$HOME_D" 2>&1)"
 case "$OUT" in *"kilepesi kod 3"*after) pass "under set -e (as in update.sh) a failing refresh is logged and the script carries on" ;; *) fail "under set -e the script carries on" "after" "$OUT" ;; esac
+
+echo ""
+echo "the child gets /dev/null as stdin"
+echo "================================="
+# Inside the loop stdin is the list of config dirs still to visit: a child that
+# reads stdin would eat the next dir and that dir would silently be skipped.
+fresh
+reg "$HOME_D/.claude" "$REG_WITH"
+reg "$INST/agents/a1/.claude-config" "$REG_WITH"
+reg "$INST/agents/a2/.claude-config" "$REG_WITH"
+FAKE_READ_STDIN=1 run <<< "LEAKED-INPUT"
+eq "every call saw an empty stdin" "stdin=[]" "$(sort -u "$FAKE_LOG.stdin")"
+eq "...so all three dirs were refreshed (2 calls each)" "6" "$(calls)"
+
+echo ""
+echo "a hanging claude is killed in time, also without coreutils timeout"
+echo "=================================================================="
+# A PATH with the tools the library and the fake need, and NO timeout/gtimeout:
+# the shape of a stock macOS install. perl stays (macOS always has it).
+mkpath() { # dir tool...
+  local d="$1" t p; shift; mkdir -p "$d"
+  for t in "$@"; do p="$(command -v "$t")" && ln -sf "$p" "$d/$t"; done
+}
+BASE_TOOLS="bash env python3 mktemp rm grep sed tail sleep cat"
+mkpath "$TMPD/path-perl" $BASE_TOOLS perl
+mkpath "$TMPD/path-bare" $BASE_TOOLS
+eq "the test PATH really has no timeout" "no" "$(PATH="$TMPD/path-perl" command -v timeout >/dev/null 2>&1 && echo yes || echo no)"
+
+fresh
+reg "$HOME_D/.claude" "$REG_WITH"
+start=$SECONDS
+PATH="$TMPD/path-perl" CHANNEL_PLUGIN_TIMEOUT_S=1 FAKE_SLEEP=30 run
+took=$((SECONDS - start))
+if [ "$took" -lt 10 ]; then pass "no timeout on PATH: perl's alarm stops a 30 s hang after 1 s (took ${took}s)"; else fail "perl fallback bounds the call" "< 10s" "${took}s"; fi
+eq "...exit 0" "0" "$RC"
+case "$OUT" in *"kilepesi kod 142"*) pass "...and it is logged as a failure (SIGALRM, 142)" ;; *) fail "...logged as a failure" "kilepesi kod 142" "$OUT" ;; esac
+eq "...the plugin update is not attempted after the killed marketplace step" "0" "$(grep -c 'plugin update slack' "$FAKE_LOG")"
+
+# coreutils timeout, when present, is the one used (a logging stand-in here).
+mkdir -p "$TMPD/path-to"
+cat > "$TMPD/path-to/timeout" <<'EOF'
+#!/bin/bash
+echo "timeout-used $1" >> "$FAKE_LOG.timeout"; shift; exec "$@"
+EOF
+chmod +x "$TMPD/path-to/timeout"
+fresh
+reg "$HOME_D/.claude" "$REG_WITH"
+PATH="$TMPD/path-to:$TMPD/path-perl" run
+eq "with timeout on PATH it wraps every call, 300 s by default" "timeout-used 300" "$(sort -u "$FAKE_LOG.timeout")"
+eq "...both calls" "2" "$(wc -l < "$FAKE_LOG.timeout" | tr -d ' ')"
+
+fresh
+reg "$HOME_D/.claude" "$REG_WITH"
+PATH="$TMPD/path-bare" run
+eq "neither timeout nor perl: still runs" "2" "$(calls)"
+case "$OUT" in *"idokorlat nelkul"*) pass "...and says it is unbounded" ;; *) fail "...says it is unbounded" "idokorlat nelkul" "$OUT" ;; esac
 
 echo ""
 echo "update.sh wiring (read, never run)"

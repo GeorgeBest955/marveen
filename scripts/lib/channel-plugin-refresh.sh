@@ -58,16 +58,27 @@ sys.exit(0 if isinstance(entries, list) and entries else 1)
 PY
 }
 
-# One child `claude` call against one config dir, with no channel reachable.
+# How long one child `claude` call may take before it is killed (seconds).
+CHANNEL_PLUGIN_TIMEOUT_S="${CHANNEL_PLUGIN_TIMEOUT_S:-300}"
+
+# One child `claude` call against one config dir, with no channel reachable,
+# bounded in time: a hanging `claude plugin ...` must not hold update.sh, which
+# is every install's update path. `timeout` (coreutils) where it exists; macOS
+# ships without it but always with perl, whose alarm survives the exec, so the
+# child is killed with SIGALRM (exit 142) when the time is up. With neither the
+# call runs unbounded, and refresh_channel_plugins says so once in the log.
 _cpr_claude() { # empty_state_dir config_dir args...
   local empty="$1" cfg="$2"; shift 2
-  local to=""
-  command -v timeout >/dev/null 2>&1 && to="timeout 300"
-  # shellcheck disable=SC2086
+  local limit=()
+  if command -v timeout >/dev/null 2>&1; then
+    limit=(timeout "$CHANNEL_PLUGIN_TIMEOUT_S")
+  elif command -v perl >/dev/null 2>&1; then
+    limit=(perl -e 'alarm shift; exec @ARGV or exit 127' "$CHANNEL_PLUGIN_TIMEOUT_S")
+  fi
   env -u TELEGRAM_BOT_TOKEN -u SLACK_BOT_TOKEN -u SLACK_APP_TOKEN -u DISCORD_BOT_TOKEN \
     CLAUDE_CONFIG_DIR="$cfg" TELEGRAM_STATE_DIR="$empty" SLACK_STATE_DIR="$empty" \
     DISCORD_STATE_DIR="$empty" \
-    $to "$CHANNEL_PLUGIN_CLAUDE_BIN" "$@" < /dev/null
+    ${limit[@]+"${limit[@]}"} "$CHANNEL_PLUGIN_CLAUDE_BIN" "$@" < /dev/null
 }
 
 refresh_channel_plugins() { # install_dir home
@@ -77,6 +88,9 @@ refresh_channel_plugins() { # install_dir home
     return 0
   fi
   local empty cfg id market out rc updated=0 current=0 failed=0
+  if ! command -v timeout >/dev/null 2>&1 && ! command -v perl >/dev/null 2>&1; then
+    echo "  (nincs timeout es perl: a plugin-frissites idokorlat nelkul fut)"
+  fi
   empty="$(mktemp -d "${TMPDIR:-/tmp}/marveen-plugin-refresh.XXXXXX")" || return 0
   while IFS= read -r cfg; do
     for id in $CHANNEL_PLUGIN_REFRESH_IDS; do
