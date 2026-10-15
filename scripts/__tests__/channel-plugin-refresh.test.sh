@@ -253,6 +253,8 @@ reg "$C" '{not json'; OUT="$(ref_of)"; RC=$?
 eq "unreadable registry: exit 1" "1" "$RC"
 reg "$C" '{"plugins":{"'"$ID"'":[{"scope":"user","version":"0.2.1"}]}}'; OUT="$(ref_of)"; RC=$?
 eq "an entry without installPath does not count: exit 1" "1" "$RC"
+reg "$C" '{"plugins":{"'"$ID"'":[{"scope":"user","version":"0.2.1"},{"scope":"project","installPath":"/x/p/0.2.2"}]}}'
+eq "...so a user entry without one yields to an entry that has it" "0.2.2" "$(ref_of)"
 reg "$C" '{"plugins":{"'"$ID"'":[{"scope":"user","installPath":"/x/slack-channel/0.2.3/"}]}}'
 eq "the installPath basename, a trailing slash ignored, no sha" "0.2.3" "$(ref_of)"
 reg "$C" '{"plugins":{"'"$ID"'":[{"scope":"user","installPath":"/x/slack-channel/0.1.0","gitCommitSha":"93b32144796c9407c0688af7f9b8de3d8fb278bb"}]}}'
