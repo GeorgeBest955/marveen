@@ -66,7 +66,7 @@ describe('the notice says what is written, why, and that a password may be asked
   })
   it('no dashes in the texts', () => {
     for (const lang of ['hu', 'en']) for (const k of ['managed.notice_what', 'managed.notice_sudo']) {
-      expect(t(lang, k)).not.toMatch(/[–—]/)
+      expect(t(lang, k)).not.toMatch(/[\u2013\u2014]/)
     }
   })
 })
