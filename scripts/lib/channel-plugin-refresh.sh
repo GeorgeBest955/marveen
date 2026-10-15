@@ -61,19 +61,44 @@ PY
 # How long one child `claude` call may take before it is killed (seconds).
 CHANNEL_PLUGIN_TIMEOUT_S="${CHANNEL_PLUGIN_TIMEOUT_S:-300}"
 
+# The perl time limit, for hosts without coreutils `timeout` (stock macOS;
+# perl is always there). It runs the command in its OWN process group and, when
+# the time is up, kills the whole group (TERM, then KILL), exit 142. Killing
+# only the direct child is not enough (Samu, measured on #1967): `claude plugin
+# marketplace update` starts git, a git hanging on the network outlives a
+# killed claude, keeps the stdout pipe open, and `out="$(...)"` waits for it,
+# so update.sh would hang anyway. A normal exit passes its code through; a
+# death by signal N becomes 128+N, as in the shell.
+_CPR_PERL_LIMIT='
+my $t = shift;
+my $pid = fork;
+defined $pid or exit 127;
+if ($pid == 0) { setpgrp(0, 0); exec @ARGV or exit 127 }
+$SIG{ALRM} = sub {
+  kill "TERM", -$pid;
+  for (1 .. 20) { last unless kill 0, -$pid; select(undef, undef, undef, 0.1); waitpid($pid, 1) }
+  kill "KILL", -$pid;
+  waitpid($pid, 0);
+  exit 142;
+};
+alarm $t;
+waitpid($pid, 0);
+alarm 0;
+exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+'
+
 # One child `claude` call against one config dir, with no channel reachable,
 # bounded in time: a hanging `claude plugin ...` must not hold update.sh, which
-# is every install's update path. `timeout` (coreutils) where it exists; macOS
-# ships without it but always with perl, whose alarm survives the exec, so the
-# child is killed with SIGALRM (exit 142) when the time is up. With neither the
-# call runs unbounded, and refresh_channel_plugins says so once in the log.
+# is every install's update path. `timeout` (coreutils) where it exists, else
+# the perl limit above. With neither the call runs unbounded, and
+# refresh_channel_plugins says so once in the log.
 _cpr_claude() { # empty_state_dir config_dir args...
   local empty="$1" cfg="$2"; shift 2
   local limit=()
   if command -v timeout >/dev/null 2>&1; then
     limit=(timeout "$CHANNEL_PLUGIN_TIMEOUT_S")
   elif command -v perl >/dev/null 2>&1; then
-    limit=(perl -e 'alarm shift; exec @ARGV or exit 127' "$CHANNEL_PLUGIN_TIMEOUT_S")
+    limit=(perl -e "$_CPR_PERL_LIMIT" "$CHANNEL_PLUGIN_TIMEOUT_S")
   fi
   env -u TELEGRAM_BOT_TOKEN -u SLACK_BOT_TOKEN -u SLACK_APP_TOKEN -u DISCORD_BOT_TOKEN \
     CLAUDE_CONFIG_DIR="$cfg" TELEGRAM_STATE_DIR="$empty" SLACK_STATE_DIR="$empty" \

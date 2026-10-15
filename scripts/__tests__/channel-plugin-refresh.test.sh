@@ -31,6 +31,10 @@ echo "${CLAUDE_CONFIG_DIR}|$*" >> "$FAKE_LOG"
 if [ -n "${FAKE_READ_STDIN:-}" ]; then
   l=""; IFS= read -r -t 2 l || true; echo "stdin=[$l]" >> "$FAKE_LOG.stdin"
 fi
+# FAKE_GRANDCHILD=<s>: leave a child behind first, like the git a real
+# `claude plugin marketplace update` starts; it holds the stdout pipe. Its pid
+# goes to $FAKE_LOG.gc so the test can check it was killed.
+if [ -n "${FAKE_GRANDCHILD:-}" ]; then sleep "$FAKE_GRANDCHILD" & echo $! >> "$FAKE_LOG.gc"; fi
 # FAKE_SLEEP=<s>: hang like a stuck `claude plugin ...` (exec, so a kill ends it).
 [ -n "${FAKE_SLEEP:-}" ] && exec sleep "$FAKE_SLEEP"
 echo "${CLAUDE_CONFIG_DIR}|tg=${TELEGRAM_BOT_TOKEN-unset}|sb=${SLACK_BOT_TOKEN-unset}|sa=${SLACK_APP_TOKEN-unset}|dc=${DISCORD_BOT_TOKEN-unset}|tgs=${TELEGRAM_STATE_DIR-unset}|sls=${SLACK_STATE_DIR-unset}" >> "$FAKE_ENV"
@@ -185,6 +189,22 @@ if [ "$took" -lt 10 ]; then pass "no timeout on PATH: perl's alarm stops a 30 s 
 eq "...exit 0" "0" "$RC"
 case "$OUT" in *"kilepesi kod 142"*) pass "...and it is logged as a failure (SIGALRM, 142)" ;; *) fail "...logged as a failure" "kilepesi kod 142" "$OUT" ;; esac
 eq "...the plugin update is not attempted after the killed marketplace step" "0" "$(grep -c 'plugin update slack' "$FAKE_LOG")"
+
+# The hang is in a grandchild holding the output pipe (git under claude): the
+# whole process group must go, or update.sh waits for the grandchild.
+fresh
+reg "$HOME_D/.claude" "$REG_WITH"
+start=$SECONDS
+PATH="$TMPD/path-perl" CHANNEL_PLUGIN_TIMEOUT_S=1 FAKE_GRANDCHILD=20 FAKE_SLEEP=30 run
+took=$((SECONDS - start))
+if [ "$took" -lt 10 ]; then pass "a grandchild holding the pipe does not hold the refresh (took ${took}s, it would live 20s)"; else fail "the process group is killed" "< 10s" "${took}s"; fi
+case "$OUT" in *"kilepesi kod 142"*) pass "...still exit 142" ;; *) fail "...still exit 142" "kilepesi kod 142" "$OUT" ;; esac
+gc_alive="no"; while read -r gp; do kill -0 "$gp" 2>/dev/null && gc_alive="yes ($gp)"; done < "$FAKE_LOG.gc"
+eq "...and the grandchild is gone" "no" "$gc_alive"
+fresh
+reg "$HOME_D/.claude" "$REG_WITH"
+PATH="$TMPD/path-perl" FAKE_FAIL="/home/" run
+case "$OUT" in *"kilepesi kod 3"*) pass "under the perl limit a normal exit code passes through" ;; *) fail "exit code passes through" "kilepesi kod 3" "$OUT" ;; esac
 
 # coreutils timeout, when present, is the one used (a logging stand-in here).
 mkdir -p "$TMPD/path-to"
