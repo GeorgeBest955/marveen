@@ -240,5 +240,58 @@ fi
 eq "...exactly once" "1" "$(grep -c 'refresh_channel_plugins' "$UPDATE")"
 
 echo ""
+echo "the current ref comes from the registry (SLACKPLUGINVER1006B)"
+echo "============================================================"
+ID=slack-channel@marveen-marketplace
+C="$TMPD/c/$RANDOM$RANDOM/cfg"; mkdir -p "$C"
+ref_of() { ( . "$LIB" && channel_plugin_current_ref "$C" "$ID" ); }
+OUT="$(ref_of)"; RC=$?
+eq "no registry: nothing printed" "" "$OUT"; eq "...exit 1" "1" "$RC"
+reg "$C" "$REG_WITHOUT"; OUT="$(ref_of)"; RC=$?
+eq "registry without the plugin: exit 1" "1" "$RC"
+reg "$C" '{not json'; OUT="$(ref_of)"; RC=$?
+eq "unreadable registry: exit 1" "1" "$RC"
+reg "$C" '{"plugins":{"'"$ID"'":[{"scope":"user","version":"0.2.1"}]}}'; OUT="$(ref_of)"; RC=$?
+eq "an entry without installPath does not count: exit 1" "1" "$RC"
+reg "$C" '{"plugins":{"'"$ID"'":[{"scope":"user","installPath":"/x/slack-channel/0.2.3/"}]}}'
+eq "the installPath basename, a trailing slash ignored, no sha" "0.2.3" "$(ref_of)"
+reg "$C" '{"plugins":{"'"$ID"'":[{"scope":"user","installPath":"/x/slack-channel/0.1.0","gitCommitSha":"93b32144796c9407c0688af7f9b8de3d8fb278bb"}]}}'
+eq "a hand deploy into the same dir is told apart by the commit" "0.1.0@93b32144796c" "$(ref_of)"
+reg "$C" '{"plugins":{"'"$ID"'":[{"scope":"project","installPath":"/x/p/0.9.9","lastUpdated":"2026-12-01T00:00:00Z"},{"scope":"user","installPath":"/x/u/0.2.3","lastUpdated":"2026-01-01T00:00:00Z"}]}}'
+eq "the user-scope entry wins over a newer project entry" "0.2.3" "$(ref_of)"
+reg "$C" '{"plugins":{"'"$ID"'":[{"scope":"project","installPath":"/x/a/0.1.0","lastUpdated":"2026-08-12T18:30:59.439Z"},{"scope":"project","installPath":"/x/b/0.2.3","lastUpdated":"2026-10-15T20:00:00.000Z"},{"scope":"project","installPath":"/x/c/0.2.2","lastUpdated":"2026-10-01T00:00:00.000Z"}]}}'
+eq "without a user entry the most recently updated one" "0.2.3" "$(ref_of)"
+
+echo ""
+echo "update.sh's Slack smoke-test block sees an official update"
+echo "========================================================="
+# The block itself, cut out of update.sh and run in a sandbox: HOME and
+# INSTALL_DIR are fixtures, no agent has a Slack .env and there is no smoke-test
+# script, so nothing can reach Slack; only the ref detection and the ref file
+# are measured.
+first="$(grep -n '^SLACK_REF_FILE=' "$UPDATE" | cut -d: -f1)"
+last="$(grep -n '^# Scrub any polluted channel tokens' "$UPDATE" | cut -d: -f1)"
+sed -n "${first},$((last - 1))p" "$UPDATE" > "$TMPD/smoke-block.sh"
+run_block() { # home install
+  ( HOME="$1" INSTALL_DIR="$2" UPDATE_PIDFILE="$2/pid" UPDATE_PIDFILE_TMP="$2/pid.tmp" \
+    RED="" NC="" bash -c 'write_result() { :; }; . "$0"' "$TMPD/smoke-block.sh" 2>&1 )
+}
+B="$TMPD/b/$RANDOM$RANDOM"; BH="$B/home"; BI="$B/install"
+mkdir -p "$BH/.claude/plugins/cache/marveen-marketplace/slack-channel/0.1.0" \
+  "$BH/.claude/plugins/cache/marveen-marketplace/slack-channel/0.2.3" "$BI/store" "$BI/scripts/lib" "$BI/agents"
+cp "$LIB" "$BI/scripts/lib/channel-plugin-refresh.sh"
+REFF="$BI/store/marveen-marketplace-slack-channel-ref.txt"
+echo "0.1.0" > "$REFF"
+reg "$BH/.claude" '{"plugins":{"'"$ID"'":[{"scope":"user","installPath":"'"$BH"'/.claude/plugins/cache/marveen-marketplace/slack-channel/0.2.3","gitCommitSha":"abcdef0123456789"}]}}'
+OUT="$(run_block "$BH" "$BI")"
+case "$OUT" in *"ref valtozott: 0.1.0 -> 0.2.3@abcdef012345"*) pass "a new version dir next to the old one is noticed" ;; *) fail "new version noticed" "ref valtozott: 0.1.0 -> 0.2.3@abcdef012345" "$OUT" ;; esac
+eq "...and becomes the stored ref" "0.2.3@abcdef012345" "$(cat "$REFF")"
+OUT="$(run_block "$BH" "$BI")"
+eq "the next update with nothing new says nothing" "" "$OUT"
+rm "$BH/.claude/plugins/installed_plugins.json"; echo "x" > "$REFF"
+OUT="$(run_block "$BH" "$BI")"
+eq "without a registry the old dir listing is the fallback" "0.1.0" "$(cat "$REFF")"
+
+echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

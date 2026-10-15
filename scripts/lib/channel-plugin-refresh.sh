@@ -58,6 +58,35 @@ sys.exit(0 if isinstance(entries, list) and entries else 1)
 PY
 }
 
+# The installed plugin's current ref, read from the registry: the basename of
+# its installPath, plus "@<first 12 of gitCommitSha>" when the entry has one.
+# The user-scope entry is preferred, else the most recently updated one. Prints
+# nothing (exit 1) without a registry entry. update.sh's Slack smoke test
+# compares this with the ref of the previous update: the cache dir name alone
+# misses an official update (it adds a new version dir NEXT TO the old one, and
+# the old name still sorts first) and a hand deploy into the same dir.
+channel_plugin_current_ref() { # config_dir plugin_id
+  local reg="$1/plugins/installed_plugins.json"
+  [ -f "$reg" ] || return 1
+  python3 - "$reg" "$2" <<'PY2' 2>/dev/null
+import json, os, sys
+try:
+    entries = json.load(open(sys.argv[1])).get("plugins", {}).get(sys.argv[2])
+except Exception:
+    sys.exit(1)
+if not isinstance(entries, list):
+    sys.exit(1)
+entries = [e for e in entries if isinstance(e, dict) and e.get("installPath")]
+if not entries:
+    sys.exit(1)
+user = [e for e in entries if e.get("scope") == "user"]
+e = user[0] if user else max(entries, key=lambda x: str(x.get("lastUpdated") or ""))
+ref = os.path.basename(str(e["installPath"]).rstrip("/"))
+sha = str(e.get("gitCommitSha") or "")[:12]
+print(ref + ("@" + sha if sha else ""))
+PY2
+}
+
 # How long one child `claude` call may take before it is killed (seconds).
 CHANNEL_PLUGIN_TIMEOUT_S="${CHANNEL_PLUGIN_TIMEOUT_S:-300}"
 
