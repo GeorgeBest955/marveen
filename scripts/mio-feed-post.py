@@ -52,7 +52,7 @@ ZIP_EXT = ".zip"
 # A szerver zip-kapujanak hatarai (marveen-io MIOFEEDZIP1016): helyben ugyanezek, hogy a rossz
 # zip itt alljon meg, ne a szerver 422-je fogja meg.
 ZIP_MAX_ENTRIES = 500
-ZIP_MAX_UNCOMPRESSED = 20_000_000
+ZIP_MAX_UNCOMPRESSED = 20 * 1024 * 1024  # 20 MiB, a szerver DEFAULT_ZIP_LIMITS-ével azonosan
 ZIP_MAX_RATIO = 100
 # A csatolmany nev-kapujabol kivett nevek (lasd a modul-docstringet). Csak itt, csak ez.
 ATTACH_NEV_KIVETEL = ("Marveen",)
@@ -127,10 +127,16 @@ def zip_gates(data: bytes) -> list:
     total = sum(i.file_size for i in infos)
     if total > ZIP_MAX_UNCOMPRESSED:
         bad.append(f"a zip kibontva {total} bajt, a plafon {ZIP_MAX_UNCOMPRESSED}")
-    # Egynel tobb end-of-central-directory szignatura: egy rekord egy komment belsejeben, ami
-    # mas konyvtarat mutathat, mint amit egy masik olvaso lat.
-    if data[-(22 + 0xFFFF):].count(b"PK\x05\x06") > 1:
-        bad.append("a zipben tobb end-of-central-directory rekord van")
+    # Az end-of-central-directory rekord: a szerver inspectZip-jevel azonosan PONTOSAN EGY olyan
+    # rekord lehet, amelynek a kommentje a fajl vegen er veget. Kettő ilyen (egy rekord a valodi
+    # kommentjeben) ketertelmu; egy sem (bajtok a rekord utan) olvashatatlan. Egy beagyazott,
+    # tarolt zip szignaturaja a fajl belsejeben ezt nem erinti.
+    lo = max(0, len(data) - 22 - 0xFFFF)
+    vegen = [q for q in range(lo, len(data) - 21)
+             if data[q:q + 4] == b"PK\x05\x06"
+             and q + 22 + int.from_bytes(data[q + 20:q + 22], "little") == len(data)]
+    if len(vegen) != 1:
+        bad.append("a zip end-of-central-directory rekordja nem egyertelmu a fajl vegen")
     for i in infos:
         # Bejegyzesenkenti arany, a szerver kapujaval azonosan: az archivum-szintu arany a
         # bejegyzesek sulyozott atlaga, sosem nagyobb a legnagyobbnal.
@@ -150,7 +156,15 @@ def zip_gates(data: bytes) -> list:
                 bad.append(f"a {i.filename!r} bejegyzes local headere mas nevet visel: {lname!r}")
             if lflags & 0x1:
                 bad.append(f"titkositott bejegyzes a zipben: {i.filename!r}")
-        n = i.filename
+        # A TELJES nev: a zipfile a .filename-t a NUL-nal levagja, az orig_filename nem.
+        n = i.orig_filename
+        if "\x00" in n:
+            bad.append(f"NUL a bejegyzes neveben: {n!r}")
+        rawname = n.encode("utf-8" if i.flag_bits & 0x800 else "cp437", errors="replace")
+        try:
+            rawname.decode("utf-8")
+        except UnicodeDecodeError:
+            bad.append(f"a bejegyzes neve nem UTF-8: {n!r}")
         if n.startswith("/") or re.match(r"^[A-Za-z]:", n) or "\\" in n or ".." in n.split("/"):
             bad.append(f"tiltott ut a zipben: {n!r}")
         if stat.S_ISLNK(i.external_attr >> 16):
@@ -184,7 +198,7 @@ def attachment_gates(path: str):
         nevek = name
         if not zprobs:
             import io
-            nevek = name + "\n" + "\n".join(i.filename for i in zipfile.ZipFile(io.BytesIO(data)).infolist())
+            nevek = name + "\n" + "\n".join(i.orig_filename for i in zipfile.ZipFile(io.BytesIO(data)).infolist())
         return name, data, [f"csatolmany: {p}" for p in zprobs
                             + _jel_kapuk(nevek) + _nev_kapuk(nevek, ATTACH_NEV_KIVETEL)]
     try:

@@ -292,12 +292,57 @@ def bump_version(path):
 
 refused("zip: an unsupported extract version is a named refusal, not a traceback",
         zpath("ver.zip", [("a.md", "x")], mutate=bump_version), "a zip nem olvashato")
+def nul_name(path):
+    """Directory AND local header name: ok.md + NUL + ../../evil.md (same length as the stored name)."""
+    b = bytearray(open(path, "rb").read())
+    new = b"ok.md\x00../../evil.md"
+    for sig, off in ((b"PK\x03\x04", 30), (b"PK\x01\x02", 46)):
+        i = b.find(sig)
+        n = int.from_bytes(b[i + (26 if off == 30 else 28):i + (28 if off == 30 else 30)], "little")
+        assert n == len(new)
+        b[i + off:i + off + n] = new
+    open(path, "wb").write(bytes(b))
+
+
+refused("zip: a NUL byte in an entry name (zipfile would cut it at the NUL)",
+        zpath("nul.zip", [("ok.md" + "_" * 14, "x")], mutate=nul_name), "NUL a bejegyzes neveben")
+
+
+def latin1_name(path):
+    """A name stored without the UTF-8 flag whose bytes are not UTF-8 (0x82 is cp437 for e-acute)."""
+    b = bytearray(open(path, "rb").read())
+    for sig, off in ((b"PK\x03\x04", 30), (b"PK\x01\x02", 46)):
+        i = b.find(sig)
+        b[i + off] = 0x82
+    open(path, "wb").write(bytes(b))
+
+
+refused("zip: an entry name that is not UTF-8", zpath("latin.zip", [("xnev.md", "x")], mutate=latin1_name), "a bejegyzes neve nem UTF-8")
+
+
+def trailing(path):
+    open(path, "ab").write(b"0123456789abcdef")
+
+
+refused("zip: bytes after the end record", zpath("tail.zip", [("a.md", "x")], mutate=trailing),
+        "end-of-central-directory rekordja nem egyertelmu")
+
+import io as _io
+_inner = _io.BytesIO()
+with zipfile.ZipFile(_inner, "w") as _z:
+    _z.writestr("belso.md", "x")
+NESTED = os.path.join(tmp, "nested.zip")
+with zipfile.ZipFile(NESTED, "w", zipfile.ZIP_STORED) as _z:
+    _z.writestr("skill/SKILL.md", "# Skill\n")
+    _z.writestr("skill/minta.zip", _inner.getvalue())
+rc, out, err, sent, vc = run([CHANNEL, TITLE, BODY, "--attach", NESTED])
+check("zip: a stored nested zip near the end passes (its end record does not end the file)", rc == 3)
 refused("zip: a .zip name over text bytes", fpath("hamis.zip", "nem zip\n"), "nem zip (hianyzik a PK-fejlec)")
 refused("zip: agent name in the zip's file name", zpath("Geri-csomag.zip", [("a.md", "x")]), "csatolmany: agens-nev a szovegben: Geri")
 refused("zip: over the size cap", fpath("nagy.zip", b"PK\x03\x04" + b"a" * 1_000_000), "1000004 bajt, a plafon 1000000")
 refused("zip: too many entries", zpath("sok.zip", [(f"f{i}.txt", "x") for i in range(501)]), "501 bejegyzes van, a plafon 500")
 refused("zip: compression bomb (ratio)", zpath("bomba.zip", [("nulla.bin", b"\0" * 3_000_000)]), "tomoritesi aranya")
-refused("zip: uncompressed total over the cap", zpath("ossz.zip", [("nulla.bin", b"\0" * 21_000_000)]), "kibontva 21000000 bajt, a plafon 20000000")
+refused("zip: uncompressed total over the cap", zpath("ossz.zip", [("nulla.bin", b"\0" * 21_000_000)]), "kibontva 21000000 bajt, a plafon 20971520")
 refused("zip: a .. path", zpath("ut.zip", [("../kint.md", "x")]), "tiltott ut a zipben: '../kint.md'")
 refused("zip: an absolute path", zpath("abs.zip", [("/etc/kint.md", "x")]), "tiltott ut a zipben: '/etc/kint.md'")
 refused("zip: a backslash path", zpath("bs.zip", [("a\\b.md", "x")]), "tiltott ut a zipben")
@@ -381,7 +426,7 @@ refused("zip: a directory entry whose local header is missing", zpath("noloc.zip
 
 FAKE = zpath("fake.zip", [("../evil.txt", "x")], mutate=fake_eocd)
 check("zip: the fake-end-record fixture really fools a directory reader", [i.filename for i in zipfile.ZipFile(FAKE).infolist()] == ["ok.txt"])
-refused("zip: a second end record hidden in the comment", FAKE, "tobb end-of-central-directory rekord van")
+refused("zip: a second end record hidden in the comment", FAKE, "end-of-central-directory rekordja nem egyertelmu")
 refused("zip: the fake directory's entry points at another local name", FAKE, "local headere mas nevet visel: '../evil.txt'")
 refused("zip: one entry over the ratio (per entry, not per archive)",
         zpath("egy.zip", [("nulla.bin", b"\0" * 300_000)] + [(f"r{i}.bin", os.urandom(4000)) for i in range(150)]),
