@@ -118,10 +118,7 @@ def run_gate(store, payload, extra_env=None, gate=GATE):
     env = dict(os.environ,
                EMAIL_APPROVAL_GATE_STORE=store,
                EMAIL_APPROVAL_WINDOW_S=str(WINDOW),
-               OUTGOING_COPY_GATE_RULES=os.path.join(store, "no-rules.json"),
-               # MAILCCGATE1016: off unless a test turns it on, so an install .env
-               # with MAIL_OWNER_CC set cannot change the other tests' outcome.
-               MAIL_OWNER_CC="")
+               OUTGOING_COPY_GATE_RULES=os.path.join(store, "no-rules.json"))
     if extra_env:
         env.update(extra_env)
     proc = subprocess.run([sys.executable, gate], input=json.dumps(payload).encode(),
@@ -901,80 +898,91 @@ with tempfile.TemporaryDirectory() as td:
 
 print("\nMAILCCGATE1016: the owner's copy is a gate at every level")
 OWNER = "owner@example.com"
-ON = {"MAIL_OWNER_CC": OWNER}
+
+
+def owner_store(root, level, value=OWNER):
+    """A store whose install root (its parent) has a .env with MAIL_OWNER_CC."""
+    store = make_store(root, level=level)
+    if value is not None:
+        with open(os.path.join(root, ".env"), "w", encoding="utf-8") as fh:
+            fh.write(f"MAIL_OWNER_CC={value}\n")
+    return store
+
+
 with tempfile.TemporaryDirectory() as td:
     for lvl in (2, 3):
-        store = make_store(os.path.join(td, f"l{lvl}"), level=lvl)
-        code, _, err = run_gate(store, mcp_send(), extra_env=ON)
+        store = owner_store(os.path.join(td, f"l{lvl}"), lvl)
+        code, _, err = run_gate(store, mcp_send())
         check(f"level {lvl}: send_email without the owner in to/cc/bcc -> DENIED, naming the address",
               code == 2 and OWNER in err and "cc" in err, f"exit={code} err={err[:200]!r}")
-    store = make_store(os.path.join(td, "l3b"), level=3)
-    code, _, err = run_gate(store, mcp_send(cc=OWNER), extra_env=ON)
+    store = owner_store(os.path.join(td, "l3b"), 3)
+    code, _, err = run_gate(store, mcp_send(cc=OWNER))
     check("level 3: the owner in cc -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
-    code, _, err = run_gate(store, mcp_send(cc="Owner Name <OWNER@Example.com>"), extra_env=ON)
+    code, _, err = run_gate(store, mcp_send(cc="Owner Name <OWNER@Example.com>"))
     check("level 3: the owner in cc as a display-name form, other case -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
-    code, _, err = run_gate(store, mcp_send(to=OWNER), extra_env=ON)
+    code, _, err = run_gate(store, mcp_send(to=OWNER))
     check("level 3: the owner as the recipient (to) -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
     bcc = mcp_send()
     bcc["tool_input"]["bcc"] = [OWNER]
-    code, _, err = run_gate(store, bcc, extra_env=ON)
+    code, _, err = run_gate(store, bcc)
     check("level 3: the owner in bcc -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
-    code, _, err = run_gate(store, mcp_send(cc="other@example.org"), extra_env=ON)
+    code, _, err = run_gate(store, mcp_send(cc="other@example.org"))
     check("level 3: a cc that is not the owner -> DENIED", code == 2, f"exit={code} err={err[:200]!r}")
-    code, _, err = run_gate(store, mcp_send(cc="xowner@example.com"), extra_env=ON)
+    code, _, err = run_gate(store, mcp_send(cc="xowner@example.com"))
     check("level 3: an address that only CONTAINS the owner's -> DENIED", code == 2, f"exit={code} err={err[:200]!r}")
+    mixed = owner_store(os.path.join(td, "mixed"), 3, value="Owner@Example.COM")
+    code, _, err = run_gate(mixed, mcp_send(cc=OWNER))
+    check("level 3: a mixed-case MAIL_OWNER_CC still matches the owner in cc -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    off = owner_store(os.path.join(td, "off"), 3, value=None)
+    code, _, err = run_gate(off, mcp_send())
+    check("level 3: no MAIL_OWNER_CC in the install .env -> the check is off, allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    empty = owner_store(os.path.join(td, "empty"), 3, value="")
+    code, _, err = run_gate(empty, mcp_send())
+    check("level 3: MAIL_OWNER_CC empty in the install .env -> off, allowed", code == 0, f"exit={code} err={err[:200]!r}")
     code, _, err = run_gate(store, mcp_send(), extra_env={"MAIL_OWNER_CC": ""})
-    check("level 3: MAIL_OWNER_CC unset -> the check is off, allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    check("an EMPTY MAIL_OWNER_CC in the process env does NOT switch the gate off (.env only)",
+          code == 2, f"exit={code} err={err[:200]!r}")
+    code, _, err = run_gate(off, mcp_send(), extra_env={"MAIL_OWNER_CC": OWNER})
+    check("a MAIL_OWNER_CC in the process env alone does not switch it on either (.env only)",
+          code == 0, f"exit={code} err={err[:200]!r}")
+    reply = {"tool_name": "mcp__claude_ai_Gmail__reply", "tool_input": {"messageId": "m1", "body": "y"}}
+    code, _, err = run_gate(store, reply)
+    check("a messageId-addressed reply (no recipient field) -> DENIED, and the message points to send_email with the owner in cc",
+          code == 2 and "send_email" in err and "messageId" in err and OWNER in err, f"exit={code} err={err[:300]!r}")
     draft = {"tool_name": "mcp__server-gmail-autoauth-mcp__draft_email",
              "tool_input": {"to": ["a@b.hu"], "subject": "x", "body": "y"}}
-    code, _, err = run_gate(store, draft, extra_env=ON)
+    code, _, err = run_gate(store, draft)
     check("a draft without the owner -> DENIED (send_draft can only be checked here)",
           code == 2 and "piszkozat" in err, f"exit={code} err={err[:200]!r}")
     draft["tool_input"]["cc"] = [OWNER]
-    code, _, err = run_gate(store, draft, extra_env=ON)
+    code, _, err = run_gate(store, draft)
     check("a draft with the owner in cc -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
-    l1 = make_store(os.path.join(td, "l1"), level=1)
-    code, _, err = run_gate(l1, draft, extra_env=ON)
+    l1 = owner_store(os.path.join(td, "l1"), 1)
+    code, _, err = run_gate(l1, draft)
     check("level 1: a draft with the owner in cc is still not a send -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
     mdraft = {"tool_name": "mcp__x__manage_email",
               "tool_input": {"operation": "reply", "draft": True, "body": "y"}}
-    code, _, err = run_gate(store, mdraft, extra_env=ON)
+    code, _, err = run_gate(store, mdraft)
     check("manage_email reply draft without the owner -> DENIED", code == 2, f"exit={code} err={err[:200]!r}")
     msearch = {"tool_name": "mcp__x__manage_email", "tool_input": {"operation": "search", "query": "x"}}
-    code, _, err = run_gate(store, msearch, extra_env=ON)
+    code, _, err = run_gate(store, msearch)
     check("manage_email search -> not checked, allowed", code == 0, f"exit={code} err={err[:200]!r}")
     upd = {"tool_name": "mcp__claude_ai_Gmail__update_draft", "tool_input": {"draftId": "d1", "body": "y"}}
-    code, _, err = run_gate(store, upd, extra_env=ON)
+    code, _, err = run_gate(store, upd)
     check("update_draft (only the changed fields) -> not checked, allowed", code == 0, f"exit={code} err={err[:200]!r}")
     msend = {"tool_name": "mcp__x__manage_email",
              "tool_input": {"operation": "send", "to": "a@b.hu", "cc": OWNER, "subject": "x", "body": "y"}}
-    code, _, err = run_gate(store, msend, extra_env=ON)
+    code, _, err = run_gate(store, msend)
     check("level 3: manage_email send with the owner in cc (string field) -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
     msend["tool_input"].pop("cc")
-    code, _, err = run_gate(store, msend, extra_env=ON)
+    code, _, err = run_gate(store, msend)
     check("level 3: manage_email send without the owner -> DENIED", code == 2, f"exit={code} err={err[:200]!r}")
     conn = {"tool_name": "mcp__claude_ai_Gmail__send_message",
             "tool_input": {"to": "a@b.hu, " + OWNER, "subject": "x", "body": "y"}}
-    code, _, err = run_gate(store, conn, extra_env=ON)
+    code, _, err = run_gate(store, conn)
     check("level 3: connector send with the owner in a comma-separated to -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
-    # The install .env is read when the process env does not carry the variable,
-    # and a variable SET to empty in the process env turns the check off over it.
-    envtree = os.path.join(td, "envtree")
-    gate_copy = copy_hook_tree(envtree)
-    with open(os.path.join(envtree, ".env"), "w", encoding="utf-8") as fh:
-        fh.write(f"MAIL_OWNER_CC={OWNER}\n")
-    base = dict(os.environ, EMAIL_APPROVAL_GATE_STORE=store, EMAIL_APPROVAL_WINDOW_S=str(WINDOW),
-                OUTGOING_COPY_GATE_RULES=os.path.join(store, "no-rules.json"))
-    base.pop("MAIL_OWNER_CC", None)
-    proc = subprocess.run([sys.executable, gate_copy], input=json.dumps(mcp_send()).encode(), capture_output=True, env=base)
-    check("MAIL_OWNER_CC only in the install .env -> the check is on, send without the owner DENIED",
-          proc.returncode == 2 and OWNER in proc.stderr.decode(), f"exit={proc.returncode}")
-    proc = subprocess.run([sys.executable, gate_copy], input=json.dumps(mcp_send()).encode(), capture_output=True,
-                          env=dict(base, MAIL_OWNER_CC=""))
-    check("MAIL_OWNER_CC set EMPTY in the process env -> off even with the .env value, allowed",
-          proc.returncode == 0, f"exit={proc.returncode} err={proc.stderr.decode()[:200]!r}")
     LSX = {"tool_name": "Bash", "tool_input": {"command": "ls -la"}}
-    code, _, err = run_gate(store, LSX, extra_env=ON)
+    code, _, err = run_gate(store, LSX)
     check("a non-send Bash -> not checked, allowed", code == 0, f"exit={code} err={err[:200]!r}")
 
 print()

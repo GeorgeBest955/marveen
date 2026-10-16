@@ -143,9 +143,9 @@ def _is_explicit_draft(tool_input: dict) -> bool:
 # The rule lived only in memory; measured over four days, at least six letters
 # left through send_email without it, and the owner noticed. So it is a gate
 # now, and it runs at EVERY email_send level (the owner's CC is not an approval
-# question). The address comes from MAIL_OWNER_CC (process env first, then the
-# install .env); unset or empty means the check is off, so a fresh install is
-# unchanged. A draft is checked too: send_draft carries only a draft id, so the
+# question). The address comes from MAIL_OWNER_CC in the install .env only (see
+# owner_cc_address); unset or empty means the check is off, so a fresh install
+# is unchanged. A draft is checked too: send_draft carries only a draft id, so the
 # letter it sends can only be checked where the draft is written. An update of
 # an existing draft is not checked: it may carry only the changed fields, and a
 # missing cc there would be a false deny.
@@ -154,12 +154,21 @@ _ADDR = re.compile(r"[^\s<>,;:\"'()\[\]]+@[^\s<>,;:\"'()\[\]]+")
 
 
 def owner_cc_address() -> str:
-    """MAIL_OWNER_CC, lowercased, or '' when the check is off. A variable that
-    is SET in the process environment wins even when empty (that is how a test
-    or an operator turns the check off without touching .env)."""
-    if "MAIL_OWNER_CC" in os.environ:
-        return os.environ["MAIL_OWNER_CC"].strip().lower()
-    return _install_setting("MAIL_OWNER_CC", "").strip().lower()
+    """MAIL_OWNER_CC from the install .env ONLY, lowercased, or '' when the
+    check is off. Never from the process environment: an empty value that ends
+    up in the launch environment would switch the gate off with no trace (the
+    mail senders read their recipient settings from .env only for the same
+    reason). The .env is the one next to the store this gate uses, i.e. the
+    install root in production, and the test's own root when a test points
+    EMAIL_APPROVAL_GATE_STORE at a temporary store."""
+    try:
+        with open(os.path.join(os.path.dirname(STORE_DIR), ".env"), encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MAIL_OWNER_CC="):
+                    return line.split("=", 1)[1].strip().strip("'\"").lower()
+    except OSError:  # no .env: the check is off, as on a fresh install
+        pass
+    return ""
 
 
 def owner_cc_missing(tool_input: dict, owner: str) -> bool:
@@ -598,9 +607,18 @@ def main():
         if owner:
             if owner_cc_missing(tool_input, owner):
                 what = "piszkozat" if is_mcp_draft and not is_mcp_send else "level"
+                no_fields = not any(tool_input.get(f) for f in ("to", "cc", "bcc"))
+                if no_fields and tool_input.get("messageId"):
+                    # A messageId-addressed reply/forward has no recipient field at
+                    # all, so "put the owner in cc" cannot be followed there.
+                    how = (f"Ez a hivas az eredeti uzenetre valaszol (messageId), cimzett-mezo "
+                           f"nelkul, igy a cc nem adhato hozza. Valaszolj send_email-lel: "
+                           f"threadId / inReplyTo + a teljes boritek (to, subject, body), "
+                           f"a cc-ben {owner}.")
+                else:
+                    how = f"Tedd a cc-be ({owner}), aztan kuldd ujra."
                 deny(f"A gazda masolata hianyzik: a {what} cimzettjei kozott (to, cc, bcc) "
-                     f"nincs ott a(z) {owner} cim.\n"
-                     f"Tedd a cc-be ({owner}), aztan kuldd ujra. A gazda minden kimeno "
+                     f"nincs ott a(z) {owner} cim.\n{how}\nA gazda minden kimeno "
                      "levelrol masolatot ker (MAIL_OWNER_CC az install .env-jeben).")
     if is_mcp_draft and not is_mcp_send:
         sys.exit(0)
