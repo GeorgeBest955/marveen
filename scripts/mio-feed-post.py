@@ -20,8 +20,8 @@ Csatolmany nelkul a kuldes BAJTRA a regi JSON-keres (scripts/__tests__/mio-feed-
 
 ZIP (MIOFEEDZIP1016, gazda-keres): --attach egy .zip-et is visz, Content-Type application/zip.
 A zip TARTALMAN a szoveges kapuk NEM futnak (kodfajlok, a gazda sajat README-je: merve a
-2026-10-16-i motion-csomagon, a kapuk tobb jo fajlt is bukatnanak), csak a fajl NEVE megy at
-rajtuk. Helyben a szerver zip-kapujanak tukre fut, KICSOMAGOLAS NELKUL (csak a central
+2026-10-16-i motion-csomagon, a kapuk tobb jo fajlt is bukatnanak), csak a zip NEVE es a
+bejegyzesek NEVEI mennek at rajtuk (ezeket a letolto latja). Helyben a szerver zip-kapujanak tukre fut, KICSOMAGOLAS NELKUL (csak a central
 directory olvasasa): PK-magia, meret-plafon, legfeljebb ZIP_MAX_ENTRIES bejegyzes, a kibontott
 osszmeret legfeljebb ZIP_MAX_UNCOMPRESSED, bejegyzesenkent a tomoritesi arany legfeljebb
 ZIP_MAX_RATIO, nincs abszolut ut, "..", backslash, symlink vagy titkositott bejegyzes, minden
@@ -118,7 +118,8 @@ def zip_gates(data: bytes) -> list:
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
         infos = zf.infolist()
-    except (zipfile.BadZipFile, ValueError) as e:
+    except (zipfile.BadZipFile, ValueError, NotImplementedError) as e:
+        # NotImplementedError: a bejegyzes extract_version-je a zipfile altal tamogatott folott.
         return [f"a zip nem olvashato: {e}"]
     bad = []
     if len(infos) > ZIP_MAX_ENTRIES:
@@ -177,8 +178,15 @@ def attachment_gates(path: str):
     if not data.strip():
         return name, data, ["ures csatolmany"]
     if is_zip:
-        return name, data, [f"csatolmany: {p}" for p in zip_gates(data)
-                            + _jel_kapuk(name) + _nev_kapuk(name, ATTACH_NEV_KIVETEL)]
+        # A zip NEVE es a bejegyzesek NEVEI nyilvanosak (a letolto latja oket), ezert a szoveges
+        # kapukon mennek at; a bejegyzesek TARTALMA nem (lasd a modul-docstringet).
+        zprobs = zip_gates(data)
+        nevek = name
+        if not zprobs:
+            import io
+            nevek = name + "\n" + "\n".join(i.filename for i in zipfile.ZipFile(io.BytesIO(data)).infolist())
+        return name, data, [f"csatolmany: {p}" for p in zprobs
+                            + _jel_kapuk(nevek) + _nev_kapuk(nevek, ATTACH_NEV_KIVETEL)]
     try:
         tartalom = data.decode("utf-8")
     except UnicodeDecodeError:

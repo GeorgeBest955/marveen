@@ -277,6 +277,21 @@ if sent:
     mf = {p.get_param("name", header="content-disposition"): p for p in mm.iter_parts()}.get("file")
 check("zip: an .md attachment is still text/markdown", mf is not None and mf.get_content_type() == "text/markdown")
 
+refused("zip: an agent name in an entry name", zpath("bentnev.zip", [("Samu-jegyzet/SKILL.md", "x")]),
+        "csatolmany: agens-nev a szovegben: Samu")
+refused("zip: a dash in an entry name", zpath("bentjel.zip", [("a \u2013 b.md", "x")]), "csatolmany: gondolatjel (U+2013)")
+
+
+def bump_version(path):
+    """An entry whose 'version needed to extract' is above what zipfile supports."""
+    b = bytearray(open(path, "rb").read())
+    c = b.find(b"PK\x01\x02")
+    b[c + 6:c + 8] = (90).to_bytes(2, "little")
+    open(path, "wb").write(bytes(b))
+
+
+refused("zip: an unsupported extract version is a named refusal, not a traceback",
+        zpath("ver.zip", [("a.md", "x")], mutate=bump_version), "a zip nem olvashato")
 refused("zip: a .zip name over text bytes", fpath("hamis.zip", "nem zip\n"), "nem zip (hianyzik a PK-fejlec)")
 refused("zip: agent name in the zip's file name", zpath("Geri-csomag.zip", [("a.md", "x")]), "csatolmany: agens-nev a szovegben: Geri")
 refused("zip: over the size cap", fpath("nagy.zip", b"PK\x03\x04" + b"a" * 1_000_000), "1000004 bajt, a plafon 1000000")
