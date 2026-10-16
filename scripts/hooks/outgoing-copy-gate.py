@@ -87,7 +87,8 @@ _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*=")
 _CMD_POSITION_KEYWORDS = frozenset(("if", "then", "else", "elif", "do", "while", "until", "{", "!"))
 _SENDER_PROG = re.compile(r"^(sendmail|msmtp|swaks)$", re.I)
 _SENDPY = re.compile(r"^send\.py$", re.I)
-_PYTHON = re.compile(r"^python3?$", re.I)
+# SUBAGENTMAILGATE1016: a version-suffixed interpreter (python3.12) is the same python.
+_PYTHON = re.compile(r"^python(3(\.\d+)?)?$", re.I)
 # A ket kapu (ez + scripts/email-send-gate.mjs) SZANDEKOSAN azonos
 # felismeres-szemantikat visel, es ezt kozos eset-lista orzi
 # (send-invocation-cases.json + konformancia-teszt): a divergencia
@@ -381,6 +382,56 @@ def _segment_is_send(toks, depth: int) -> bool:
     return any(_head_is_send(h, depth) for h in _command_heads(toks))
 
 
+# SUBAGENTMAILGATE1016: the sender was recognised only with the script as the
+# FIRST interpreter argument and the exact --to flag. The boundary and the
+# measured bypasses are written out at pythonHeadSends in email-send-gate.mjs
+# (the JS twin); send-invocation-cases.json binds the two.
+_PY_OPT_WITH_ARG = {"-X", "-W", "--check-hash-based-pycs"}
+_RECIPIENT_FLAG = re.compile(r"^--to?(=|$)")
+_UNDECIDABLE_PATH = re.compile(r"[*?[{$]")
+
+
+def _python_script_operand(rest):
+    """(script, stdin, stdin_redirect) for an interpreter's argument list."""
+    stdin_redirect = False
+    i = 0
+    while i < len(rest):
+        t = rest[i]
+        if t == "--":
+            return (rest[i + 1] if i + 1 < len(rest) else None), False, stdin_redirect
+        if t == "-":
+            return None, True, stdin_redirect
+        if re.match(r"^-[cm]", t):  # code string / module: judged elsewhere
+            return None, False, stdin_redirect
+        if t in _PY_OPT_WITH_ARG:
+            i += 2
+            continue
+        if t.startswith("<"):
+            stdin_redirect = True
+            i += 2 if t == "<" else 1
+            continue
+        if re.match(r"^\d*>", t):
+            i += 2 if re.match(r"^\d*>>?$", t) else 1
+            continue
+        if t.startswith("-") and len(t) > 1:
+            i += 1
+            continue
+        return t, False, stdin_redirect
+    return None, False, stdin_redirect
+
+
+def _python_head_sends(rest) -> bool:
+    recipient = any(_RECIPIENT_FLAG.match(t) for t in rest)
+    script, stdin, stdin_redirect = _python_script_operand(rest)
+    if script is not None and _SENDPY.match(_basename(script)):
+        return recipient
+    if script is not None and _UNDECIDABLE_PATH.search(script):
+        return recipient or any(t != script and "$" in t for t in rest)
+    if stdin or (script is None and stdin_redirect):
+        return recipient
+    return False
+
+
 def _head_is_send(toks, depth: int) -> bool:
     if toks is None:  # the depth bound was hit on a wrapper: audit it
         return True
@@ -411,9 +462,9 @@ def _head_is_send(toks, depth: int) -> bool:
         for i, t in enumerate(rest):
             if t == "-m" and i + 1 < len(rest) and rest[i + 1].rsplit(".", 1)[-1] == "send":
                 candidates.append("send.py")
-    if any(_SENDPY.match(c) for c in candidates) and any(
-        t == "--to" or t.startswith("--to=") for t in rest
-    ):
+    if any(_SENDPY.match(c) for c in candidates) and any(_RECIPIENT_FLAG.match(t) for t in rest):
+        return True
+    if _PYTHON.match(prog) and _python_head_sends(rest):
         return True
     # graph-mail kimeno alparanccsal (tsx/node runner utan is)
     if any(_GRAPHMAIL.match(_basename(t)) for t in toks) and "send" in rest:
