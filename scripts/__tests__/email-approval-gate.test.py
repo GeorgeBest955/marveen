@@ -957,6 +957,22 @@ with tempfile.TemporaryDirectory() as td:
             "tool_input": {"to": "a@b.hu, " + OWNER, "subject": "x", "body": "y"}}
     code, _, err = run_gate(store, conn, extra_env=ON)
     check("level 3: connector send with the owner in a comma-separated to -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    # The install .env is read when the process env does not carry the variable,
+    # and a variable SET to empty in the process env turns the check off over it.
+    envtree = os.path.join(td, "envtree")
+    gate_copy = copy_hook_tree(envtree)
+    with open(os.path.join(envtree, ".env"), "w", encoding="utf-8") as fh:
+        fh.write(f"MAIL_OWNER_CC={OWNER}\n")
+    base = dict(os.environ, EMAIL_APPROVAL_GATE_STORE=store, EMAIL_APPROVAL_WINDOW_S=str(WINDOW),
+                OUTGOING_COPY_GATE_RULES=os.path.join(store, "no-rules.json"))
+    base.pop("MAIL_OWNER_CC", None)
+    proc = subprocess.run([sys.executable, gate_copy], input=json.dumps(mcp_send()).encode(), capture_output=True, env=base)
+    check("MAIL_OWNER_CC only in the install .env -> the check is on, send without the owner DENIED",
+          proc.returncode == 2 and OWNER in proc.stderr.decode(), f"exit={proc.returncode}")
+    proc = subprocess.run([sys.executable, gate_copy], input=json.dumps(mcp_send()).encode(), capture_output=True,
+                          env=dict(base, MAIL_OWNER_CC=""))
+    check("MAIL_OWNER_CC set EMPTY in the process env -> off even with the .env value, allowed",
+          proc.returncode == 0, f"exit={proc.returncode} err={proc.stderr.decode()[:200]!r}")
     LSX = {"tool_name": "Bash", "tool_input": {"command": "ls -la"}}
     code, _, err = run_gate(store, LSX, extra_env=ON)
     check("a non-send Bash -> not checked, allowed", code == 0, f"exit={code} err={err[:200]!r}")
