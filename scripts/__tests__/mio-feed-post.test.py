@@ -27,6 +27,8 @@ import hashlib
 import importlib.util
 import io
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -358,6 +360,33 @@ def cd_gap(path):
 
 refused("zip: a gap before the end record (the client stays stricter than the server)",
         zpath("res.zip", [("a.md", "x")], mutate=cd_gap), "a zip nem olvashato")
+
+
+def zip64_tail(path):
+    """A ZIP64 end record + locator between the directory and the end record, the plain fields
+    keeping the real values: what Info-ZIP writes when it packs from stdin."""
+    b = open(path, "rb").read()
+    q = b.rfind(b"PK\x05\x06")
+    n = int.from_bytes(b[q + 10:q + 12], "little")
+    cd_size = int.from_bytes(b[q + 12:q + 16], "little")
+    cd_offset = int.from_bytes(b[q + 16:q + 20], "little")
+    rec = (b"PK\x06\x06" + (44).to_bytes(8, "little") + (45).to_bytes(2, "little") * 2
+           + (0).to_bytes(4, "little") * 2 + n.to_bytes(8, "little") * 2
+           + cd_size.to_bytes(8, "little") + cd_offset.to_bytes(8, "little"))
+    loc = b"PK\x06\x07" + (0).to_bytes(4, "little") + q.to_bytes(8, "little") + (1).to_bytes(4, "little")
+    open(path, "wb").write(b[:q] + rec + loc + b[q:])
+
+
+ZIP64T = zpath("z64.zip", [("a.md", "x")], mutate=zip64_tail)
+rc, out, err, sent, vc = run([CHANNEL, TITLE, BODY, "--attach", ZIP64T])
+check("zip: a ZIP64 end record + locator before the end record passes (exit 3)", rc == 3 and sent == [])
+if shutil.which("zip"):
+    ZSTDIN = os.path.join(tmp, "stdin.zip")
+    subprocess.run(["zip", "-q", ZSTDIN, "-"], input=b"x\n", check=True)
+    rc, out, err, sent, vc = run([CHANNEL, TITLE, BODY, "--attach", ZSTDIN])
+    check("zip: an Info-ZIP zip packed from stdin passes (exit 3)", rc == 3 and sent == [])
+else:
+    print("SKIP zip: no Info-ZIP on this host, the stdin case runs only on the hand-built record")
 
 import io as _io
 _inner = _io.BytesIO()

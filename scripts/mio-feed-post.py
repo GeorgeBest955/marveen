@@ -141,11 +141,18 @@ def zip_gates(data: bytes) -> list:
         # A central directory kozvetlenul az end-rekord elott er veget. A zipfile egy elefuzott
         # masik zip (vagy barmi elotag) miatt eltolja az offseteket, es igy is olvas; a szerver
         # az eltolast nem vegzi el, es zip_unreadable-lel elutasit. A ZIP64-jelzo (0xffffffff)
-        # is itt bukik el, a szerver azt sem fogadja.
+        # is itt bukik el, a szerver azt sem fogadja. Az Info-ZIP stdin-bol csomagolva a konyvtar es
+        # az end-rekord koze ZIP64 end-rekordot + lokatort ir, a sima mezokben a valodi ertekekkel;
+        # ilyenkor a konyvtar a ZIP64 end-rekord elott er veget.
         q = vegen[0]
         cd_size = int.from_bytes(data[q + 12:q + 16], "little")
         cd_offset = int.from_bytes(data[q + 16:q + 20], "little")
-        if cd_offset + cd_size != q:
+        vege = q
+        if data[q - 20:q - 16] == b"PK\x06\x07":
+            z64 = int.from_bytes(data[q - 12:q - 4], "little")
+            if data[z64:z64 + 4] == b"PK\x06\x06":
+                vege = z64
+        if cd_offset + cd_size != vege:
             bad.append("a zip central directory-ja nem kozvetlenul az end-rekord elott er veget")
     for i in infos:
         # Bejegyzesenkenti arany, a szerver kapujaval azonosan: az archivum-szintu arany a
