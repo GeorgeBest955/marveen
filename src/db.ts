@@ -3937,6 +3937,21 @@ export function markMessageFailed(id: number, error?: string): boolean {
   return db.prepare("UPDATE agent_messages SET status = 'failed', result = ?, completed_at = ? WHERE id = ?").run(error ?? null, now, id).changes > 0
 }
 
+// Close a message that is still OPEN (pending or delivered), atomically: the
+// status check and the write are one UPDATE, so of two concurrent closes only
+// one changes the row. Used by the PUT /api/messages/:id route, where a second
+// close of an already-closed row used to overwrite its result and send a
+// second completion report in the recipient's name. The router keeps the
+// unguarded markMessageDone/markMessageFailed above for its own transitions.
+export function closeOpenMessage(id: number, status: 'done' | 'failed', result?: string): boolean {
+  const now = Math.floor(Date.now() / 1000)
+  const sql = status === 'done'
+    ? "UPDATE agent_messages SET status = 'done', result = ?, completed_at = ?, delivered_at = COALESCE(delivered_at, ?) WHERE id = ? AND status NOT IN ('done', 'failed')"
+    : "UPDATE agent_messages SET status = 'failed', result = ?, completed_at = ? WHERE id = ? AND status NOT IN ('done', 'failed')"
+  const args = status === 'done' ? [result ?? null, now, now, id] : [result ?? null, now, id]
+  return db.prepare(sql).run(...args).changes > 0
+}
+
 // Status-guarded fail for the federation bridge's terminal branches: it must
 // only fire (and only bounce a failure notice) when THIS call actually closed
 // a still-pending row. The unguarded markMessageFailed above would also

@@ -2,7 +2,7 @@ import {
   createAgentMessage, getPendingMessages, listAgentMessages, getRecipientQueueState,
   getAgentConversation, getAgentConversationThreads,
   getKanbanSeqByIdPrefix,
-  markMessageDone, markMessageFailed, getAgentMessage,
+  markMessageDone, closeOpenMessage, getAgentMessage,
   closeOtelSpan,
   getPendingBacklogByAgent,
   countNewerMessagesForRows,
@@ -618,9 +618,27 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
       return true
     }
 
+    // Only an OPEN message is closed here (closeOpenMessage checks and writes in one
+    // UPDATE). A second close of a done/failed row is refused with 409 and changes
+    // nothing: it used to overwrite the stored result and send a second completion
+    // report in the recipient's name, also when the second caller was not the
+    // recipient. A repeated PUT after a client timeout gets the same 409; the first
+    // close already took effect.
     let ok = false
-    if (newStatus === 'done') ok = markMessageDone(id, result)
-    else if (newStatus === 'failed') ok = markMessageFailed(id, result)
+    if (newStatus === 'done' || newStatus === 'failed') {
+      ok = closeOpenMessage(id, newStatus, result)
+      if (!ok) {
+        const current = getAgentMessage(id)
+        if (current && (current.status === 'done' || current.status === 'failed')) {
+          json(res, {
+            error: 'Message already closed',
+            status: current.status,
+            hint: 'the first close already took effect; nothing was changed and no completion report was sent',
+          }, 409)
+          return true
+        }
+      }
+    }
 
     if (ok) {
       const done = getAgentMessage(id)
