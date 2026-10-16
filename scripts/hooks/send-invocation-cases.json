@@ -985,6 +985,11 @@
       "name": "SUBAGENTMAILGATE1016 control: a stdin program without a recipient flag",
       "cmd": "python3 - < scripts/report.py",
       "expected": false
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016: the sender run directly with an argparse abbreviation of --to",
+      "cmd": "./scripts/support-mail/send.py --t a@example.com --subject T --body B",
+      "expected": true
     }
   ]
 }
