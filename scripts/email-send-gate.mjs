@@ -111,9 +111,10 @@ const ENV_ASSIGN = /^[A-Za-z_][A-Za-z_0-9]*=/
 const CMD_POSITION_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '{', '!'])
 const SENDER_PROG = /^(sendmail|msmtp|swaks)$/i
 const SENDPY = /^send\.py$/i
-// SUBAGENTMAILGATE1016: a version-suffixed interpreter (python3.12, python3.13)
-// is the same python; the old /^python3?$/ let it through as "not an interpreter".
-const PYTHON = /^python(3(\.\d+)?)?$/i
+// SUBAGENTMAILGATE1016: a version-suffixed interpreter (python3.12, python3.13, and
+// the free-threaded python3.13t) is the same python; the old /^python3?$/ let it
+// through as "not an interpreter".
+const PYTHON = /^python(3(\.\d+t?)?)?$/i
 const NODEISH = /^(node|tsx|ts-node|deno|bun|npx)$/i
 const GRAPHMAIL = /^graph-mail(\.ts|\.js)?$/i
 const WRAPPER_SHELL = /^(sh|bash|zsh|dash)$/i
@@ -370,6 +371,49 @@ function pythonScriptOperand(rest) {
   }
   return { script: null, stdin: false, stdinRedirect }
 }
+// A command or process substitution as a word of the command (`$(...)`, a
+// backtick pair, `<(...)`, `>(...)`), with the substitution replaced by one
+// placeholder word that carries a `$`. maskSubshellMarkers splits these into
+// their own segments, which is right for judging the INNER command, but it
+// leaves the outer one without the word: `python3 $(echo .../send.py) --to x`
+// became `python3` and `--to x`. Judged on this form as well, the word is an
+// undecidable script path (or interpreter) like a variable. Quoted text is left
+// alone: a quoted `"$(...)"` already reaches the tokenizer as a `$` word.
+export function flattenSubstitutions(cmd) {
+  let out = ''
+  let q = null
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]
+    if (q) {
+      if (ch === '\\' && q === '"' && i + 1 < cmd.length) { out += ch + cmd[++i]; continue }
+      if (ch === q) q = null
+      out += ch
+      continue
+    }
+    if (ch === "'" || ch === '"') { q = ch; out += ch; continue }
+    if (ch === '\\' && i + 1 < cmd.length) { out += ch + cmd[++i]; continue }
+    const opens = (ch === '$' || ch === '<' || ch === '>') && cmd[i + 1] === '('
+    if (opens || ch === '`') {
+      let depth = 1
+      let j = i + (opens ? 2 : 1)
+      let iq = null
+      for (; j < cmd.length && depth > 0; j++) {
+        const c = cmd[j]
+        if (iq) { if (c === iq) iq = null; continue }
+        if (c === "'" || c === '"') { iq = c; continue }
+        if (ch === '`') { if (c === '`') depth = 0; continue }
+        if (c === '(') depth++
+        else if (c === ')') depth--
+      }
+      out += ' $__SUBST__ '
+      i = j - 1
+      continue
+    }
+    out += ch
+  }
+  return out
+}
+
 function pythonHeadSends(rest) {
   const recipient = rest.some((t) => RECIPIENT_FLAG.test(t))
   const { script, stdin, stdinRedirect } = pythonScriptOperand(rest)
@@ -412,6 +456,9 @@ function headIsSend(toks, depth) {
   }
   if (candidates.some((c) => SENDPY.test(c)) && rest.some((t) => RECIPIENT_FLAG.test(t))) return true
   if (PYTHON.test(prog) && pythonHeadSends(rest)) return true
+  // An interpreter or program that cannot be resolved statically ($PY, a glob,
+  // a substitution) with a recipient flag: what runs is undecidable here.
+  if (UNDECIDABLE_PATH.test(toks[0]) && rest.some((t) => RECIPIENT_FLAG.test(t))) return true
   if (toks.some((t) => GRAPHMAIL.test(basename(t))) && rest.includes('send')) return true
   // RESENDGETTWIN1010: only an actual send (POST/PUT/..., or a body) fires; a
   // read-only GET/HEAD passes; an undecidable method stays fail-closed.
@@ -524,7 +571,16 @@ export function isSendInvocation(cmd, depth = 0) {
     // this path the gate is exactly as strict as before -- never weaker.
     return SEND_PATTERNS.some((re) => re.test(cmd))
   }
-  return segments.some((toks) => segmentIsSend(toks, depth))
+  if (segments.some((toks) => segmentIsSend(toks, depth))) return true
+  // The same command with every substitution as one undecidable word (see
+  // flattenSubstitutions): the outer command keeps the word it would run.
+  const flat = flattenSubstitutions(cmd)
+  if (flat === cmd) return false
+  try {
+    return segmentsTokens(flat).some((toks) => segmentIsSend(toks, depth))
+  } catch {
+    return SEND_PATTERNS.some((re) => re.test(cmd))
+  }
 }
 
 // Outbound-shaped operations of the multiplexed manage_email tool. Each of

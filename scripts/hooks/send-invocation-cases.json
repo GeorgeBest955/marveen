@@ -990,6 +990,51 @@
       "name": "SUBAGENTMAILGATE1016: the sender run directly with an argparse abbreviation of --to",
       "cmd": "./scripts/support-mail/send.py --t a@example.com --subject T --body B",
       "expected": true
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016: a command substitution as the script path",
+      "cmd": "python3 $(echo scripts/support-mail/send.py) --to a@example.com --subject T --body B",
+      "expected": true
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016: a backtick substitution as the script path",
+      "cmd": "python3 `echo scripts/support-mail/send.py` --to a@example.com --subject T --body B",
+      "expected": true
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016: a process substitution as the program",
+      "cmd": "python3 <(cat scripts/support-mail/send.py) --to a@example.com --subject T --body B",
+      "expected": true
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016: a variable as the interpreter",
+      "cmd": "$PY scripts/support-mail/send.py --to a@example.com --subject T --body B",
+      "expected": true
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016: a variable interpreter set in the same command",
+      "cmd": "PY=python3; $PY scripts/support-mail/send.py --to a@example.com --subject T --body B",
+      "expected": true
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016: the free-threaded interpreter name",
+      "cmd": "python3.13t scripts/support-mail/send.py --to a@example.com --subject T --body B",
+      "expected": true
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016 control: a substitution as a plain argument",
+      "cmd": "python3 scripts/x.py --date $(date +%F)",
+      "expected": false
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016 control: a process substitution program without a recipient flag",
+      "cmd": "python3 <(echo 'print(1)')",
+      "expected": false
+    },
+    {
+      "name": "SUBAGENTMAILGATE1016 control: a variable command without a recipient flag",
+      "cmd": "$EDITOR notes.md",
+      "expected": false
     }
   ]
 }
