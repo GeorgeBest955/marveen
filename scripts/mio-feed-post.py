@@ -137,6 +137,16 @@ def zip_gates(data: bytes) -> list:
              and q + 22 + int.from_bytes(data[q + 20:q + 22], "little") == len(data)]
     if len(vegen) != 1:
         bad.append("a zip end-of-central-directory rekordja nem egyertelmu a fajl vegen")
+    else:
+        # A central directory kozvetlenul az end-rekord elott er veget. A zipfile egy elefuzott
+        # masik zip (vagy barmi elotag) miatt eltolja az offseteket, es igy is olvas; a szerver
+        # az eltolast nem vegzi el, es zip_unreadable-lel elutasit. A ZIP64-jelzo (0xffffffff)
+        # is itt bukik el, a szerver azt sem fogadja.
+        q = vegen[0]
+        cd_size = int.from_bytes(data[q + 12:q + 16], "little")
+        cd_offset = int.from_bytes(data[q + 16:q + 20], "little")
+        if cd_offset + cd_size != q:
+            bad.append("a zip central directory-ja nem kozvetlenul az end-rekord elott er veget")
     for i in infos:
         # Bejegyzesenkenti arany, a szerver kapujaval azonosan: az archivum-szintu arany a
         # bejegyzesek sulyozott atlaga, sosem nagyobb a legnagyobbnal.
@@ -158,6 +168,8 @@ def zip_gates(data: bytes) -> list:
                 bad.append(f"titkositott bejegyzes a zipben: {i.filename!r}")
         # A TELJES nev: a zipfile a .filename-t a NUL-nal levagja, az orig_filename nem.
         n = i.orig_filename
+        if not n:
+            bad.append("ures bejegyzes-nev a zipben")
         if "\x00" in n:
             bad.append(f"NUL a bejegyzes neveben: {n!r}")
         rawname = n.encode("utf-8" if i.flag_bits & 0x800 else "cp437", errors="replace")

@@ -327,6 +327,38 @@ def trailing(path):
 refused("zip: bytes after the end record", zpath("tail.zip", [("a.md", "x")], mutate=trailing),
         "end-of-central-directory rekordja nem egyertelmu")
 
+
+def empty_name(path):
+    """Rebuild with one entry whose name is empty (length 0 in the local header and the directory)."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(zipfile.ZipInfo(""), "x")
+
+
+refused("zip: an empty entry name (the server answers zip_unsafe_path)",
+        zpath("ures.zip", [("a.md", "x")], mutate=empty_name), "ures bejegyzes-nev a zipben")
+
+
+def concat(path):
+    """Another zip in front: zipfile shifts the offsets and still reads it, the server does not."""
+    front, own = open(ZGOOD, "rb").read(), open(path, "rb").read()
+    open(path, "wb").write(front + own)
+
+
+refused("zip: two zips concatenated (the server answers zip_unreadable)",
+        zpath("ketto.zip", [("a.md", "x")], mutate=concat), "nem kozvetlenul az end-rekord elott er veget")
+
+
+def cd_gap(path):
+    """Bytes between the central directory and the end record (the end record keeps its offsets).
+    zipfile already refuses this one, before the end-record rule; the server accepts it."""
+    b = open(path, "rb").read()
+    q = b.rfind(b"PK\x05\x06")
+    open(path, "wb").write(b[:q] + b"\x00" * 8 + b[q:])
+
+
+refused("zip: a gap before the end record (the client stays stricter than the server)",
+        zpath("res.zip", [("a.md", "x")], mutate=cd_gap), "a zip nem olvashato")
+
 import io as _io
 _inner = _io.BytesIO()
 with zipfile.ZipFile(_inner, "w") as _z:
