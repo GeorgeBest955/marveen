@@ -148,7 +148,7 @@ def zip_gates(data: bytes) -> list:
         cd_size = int.from_bytes(data[q + 12:q + 16], "little")
         cd_offset = int.from_bytes(data[q + 16:q + 20], "little")
         vege = q
-        if data[q - 20:q - 16] == b"PK\x06\x07":
+        if q >= 20 and data[q - 20:q - 16] == b"PK\x06\x07":
             z64 = int.from_bytes(data[q - 12:q - 4], "little")
             if data[z64:z64 + 4] == b"PK\x06\x06":
                 vege = z64

@@ -380,6 +380,24 @@ def zip64_tail(path):
 ZIP64T = zpath("z64.zip", [("a.md", "x")], mutate=zip64_tail)
 rc, out, err, sent, vc = run([CHANNEL, TITLE, BODY, "--attach", ZIP64T])
 check("zip: a ZIP64 end record + locator before the end record passes (exit 3)", rc == 3 and sent == [])
+
+
+def zip64_bad_locator(path):
+    """The same tail, but the locator points at bytes that are not a ZIP64 end record."""
+    zip64_tail(path)
+    b = bytearray(open(path, "rb").read())
+    q = b.rfind(b"PK\x05\x06")
+    b[q - 12:q - 4] = (0).to_bytes(8, "little")
+    open(path, "wb").write(bytes(b))
+
+
+# Refused either way: some zipfile versions already reject the locator (a zip nem olvashato), and
+# where zipfile tolerates it, the directory-end rule does.
+rc, out, err, sent, vc = run([CHANNEL, TITLE, BODY, "--attach",
+                              zpath("z64rossz.zip", [("a.md", "x")], mutate=zip64_bad_locator), "--confirm"])
+check("zip: a locator that points at no ZIP64 end record is refused, nothing sent",
+      rc == 1 and sent == [] and vc == []
+      and ("nem kozvetlenul az end-rekord elott er veget" in err or "a zip nem olvashato" in err))
 if shutil.which("zip"):
     ZSTDIN = os.path.join(tmp, "stdin.zip")
     subprocess.run(["zip", "-q", ZSTDIN, "-"], input=b"x\n", check=True)
