@@ -332,6 +332,38 @@ def fake_eocd(path):
     open(path, "wb").write(bytes(b[:e + 22] + comment))
 
 
+def local_enc_only(path):
+    """The encryption bit set in the LOCAL header only; the directory says plain."""
+    b = bytearray(open(path, "rb").read())
+    i = b.find(b"PK\x03\x04")
+    b[i + 6] |= 0x1
+    open(path, "wb").write(bytes(b))
+
+
+def bad_local_offset(path):
+    """The directory entry's local-header offset points one byte past the real header."""
+    b = bytearray(open(path, "rb").read())
+    c = b.find(b"PK\x01\x02")
+    b[c + 42:c + 46] = (1).to_bytes(4, "little")
+    open(path, "wb").write(bytes(b))
+
+
+refused("zip: encryption flagged in the local header only", zpath("lenc.zip", [("titok.md", "x")], mutate=local_enc_only),
+        "titkositott bejegyzes a zipben: 'titok.md'")
+def central_enc_only(path):
+    """The encryption bit set in the central directory only; the local header says plain."""
+    b = bytearray(open(path, "rb").read())
+    c = b.find(b"PK\x01\x02")
+    b[c + 8] |= 0x1
+    open(path, "wb").write(bytes(b))
+
+
+refused("zip: encryption flagged in the directory only", zpath("cenc.zip", [("rejt.md", "x")], mutate=central_enc_only),
+        "titkositott bejegyzes a zipben: 'rejt.md'")
+refused("zip: a directory entry whose local header is missing", zpath("noloc.zip", [("a.md", "x")], mutate=bad_local_offset),
+        "local headere hianyzik")
+
+
 FAKE = zpath("fake.zip", [("../evil.txt", "x")], mutate=fake_eocd)
 check("zip: the fake-end-record fixture really fools a directory reader", [i.filename for i in zipfile.ZipFile(FAKE).infolist()] == ["ok.txt"])
 refused("zip: a second end record hidden in the comment", FAKE, "tobb end-of-central-directory rekord van")
