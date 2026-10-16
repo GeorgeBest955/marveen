@@ -15,7 +15,8 @@ and every request the script would send is recorded instead.
     part carrying exactly the file's bytes.
   - MIOFEEDZIP1016: a .zip also goes (application/zip). Its NAME passes the text gates, its
     content only the structural gates (PK magic, entry count, uncompressed size, ratio, no
-    absolute / .. / backslash path, no symlink, no encrypted entry); it is never extracted.
+    absolute / .. / backslash path, no symlink, no encrypted entry, the per-entry ratio, every local
+    header name equal to the directory's, one end record); it is never extracted.
 
 Run: python3 <thisfile>   Exit 0 = all pass.
 """
@@ -300,6 +301,44 @@ def set_encrypted(path):
 
 refused("zip: an encrypted entry", zpath("enc.zip", [("titkos.md", "x")], mutate=set_encrypted),
         "titkositott bejegyzes a zipben: 'titkos.md'")
+
+
+def rename_local(path):
+    """The local header says ../evil.tx while the central directory still says okfile.txt."""
+    b = bytearray(open(path, "rb").read())
+    i = b.find(b"PK\x03\x04")
+    n = int.from_bytes(b[i + 26:i + 28], "little")
+    b[i + 30:i + 30 + n] = b"../evil.tx"[:n].ljust(n, b"x")
+    open(path, "wb").write(bytes(b))
+
+
+refused("zip: a local header name that differs from the directory", zpath("local.zip", [("okfile.txt", "hello")], mutate=rename_local),
+        "local headere mas nevet visel: '../evil.tx'")
+
+
+def fake_eocd(path):
+    """The real archive (../evil.txt) carries, in its comment, a benign directory and a fake end record."""
+    import io as _io
+    good = _io.BytesIO()
+    with zipfile.ZipFile(good, "w") as z:
+        z.writestr("ok.txt", "x")
+    g = good.getvalue()
+    cd, end = g[g.find(b"PK\x01\x02"):g.find(b"PK\x05\x06")], bytearray(g[g.find(b"PK\x05\x06"):][:22])
+    b = bytearray(open(path, "rb").read())
+    e = b.find(b"PK\x05\x06")
+    end[16:20] = (e + 22).to_bytes(4, "little")
+    comment = cd + bytes(end)
+    b[e + 20:e + 22] = len(comment).to_bytes(2, "little")
+    open(path, "wb").write(bytes(b[:e + 22] + comment))
+
+
+FAKE = zpath("fake.zip", [("../evil.txt", "x")], mutate=fake_eocd)
+check("zip: the fake-end-record fixture really fools a directory reader", [i.filename for i in zipfile.ZipFile(FAKE).infolist()] == ["ok.txt"])
+refused("zip: a second end record hidden in the comment", FAKE, "tobb end-of-central-directory rekord van")
+refused("zip: the fake directory's entry points at another local name", FAKE, "local headere mas nevet visel: '../evil.txt'")
+refused("zip: one entry over the ratio (per entry, not per archive)",
+        zpath("egy.zip", [("nulla.bin", b"\0" * 300_000)] + [(f"r{i}.bin", os.urandom(4000)) for i in range(150)]),
+        "'nulla.bin' bejegyzes tomoritesi aranya a plafon")
 
 # ---------------------------------------------------------------------------
 # 5. MIOFEEDMARVEEN1014: the two narrow exceptions

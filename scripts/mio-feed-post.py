@@ -23,8 +23,10 @@ A zip TARTALMAN a szoveges kapuk NEM futnak (kodfajlok, a gazda sajat README-je:
 2026-10-16-i motion-csomagon, a kapuk tobb jo fajlt is bukatnanak), csak a fajl NEVE megy at
 rajtuk. Helyben a szerver zip-kapujanak tukre fut, KICSOMAGOLAS NELKUL (csak a central
 directory olvasasa): PK-magia, meret-plafon, legfeljebb ZIP_MAX_ENTRIES bejegyzes, a kibontott
-osszmeret legfeljebb ZIP_MAX_UNCOMPRESSED, a tomoritesi arany legfeljebb ZIP_MAX_RATIO, nincs
-abszolut ut, "..", backslash, symlink vagy titkositott bejegyzes.
+osszmeret legfeljebb ZIP_MAX_UNCOMPRESSED, bejegyzesenkent a tomoritesi arany legfeljebb
+ZIP_MAX_RATIO, nincs abszolut ut, "..", backslash, symlink vagy titkositott bejegyzes, minden
+local header neve egyezik a central directory nevevel, es egyetlen end-of-central-directory
+rekord van (a marveen-io zip-kapujaval iker).
 
 KET SZUK KIVETEL (MIOFEEDMARVEEN1014, Marveen dontese): a "Marveen" TERMEKNEV a csatolmany
 tartalmaban es neveben nem bukik az agens-nev kapun (egy termek-leiras kenytelen kimondani);
@@ -122,12 +124,31 @@ def zip_gates(data: bytes) -> list:
     if len(infos) > ZIP_MAX_ENTRIES:
         bad.append(f"a zipben {len(infos)} bejegyzes van, a plafon {ZIP_MAX_ENTRIES}")
     total = sum(i.file_size for i in infos)
-    packed = sum(i.compress_size for i in infos)
     if total > ZIP_MAX_UNCOMPRESSED:
         bad.append(f"a zip kibontva {total} bajt, a plafon {ZIP_MAX_UNCOMPRESSED}")
-    if packed and total / packed > ZIP_MAX_RATIO:
-        bad.append(f"a zip tomoritesi aranya {total // packed}x, a plafon {ZIP_MAX_RATIO}x")
+    # Egynel tobb end-of-central-directory szignatura: egy rekord egy komment belsejeben, ami
+    # mas konyvtarat mutathat, mint amit egy masik olvaso lat.
+    if data[-(22 + 0xFFFF):].count(b"PK\x05\x06") > 1:
+        bad.append("a zipben tobb end-of-central-directory rekord van")
     for i in infos:
+        # Bejegyzesenkenti arany, a szerver kapujaval azonosan: az archivum-szintu arany a
+        # bejegyzesek sulyozott atlaga, sosem nagyobb a legnagyobbnal.
+        if i.file_size > ZIP_MAX_RATIO * max(i.compress_size, 1):
+            bad.append(f"a {i.filename!r} bejegyzes tomoritesi aranya a plafon ({ZIP_MAX_RATIO}x) folott")
+        # A local header neve egyezzen a central directory nevevel: egy streamelo kicsomagolo
+        # a local headert olvassa, nem a konyvtarat.
+        h = i.header_offset
+        if data[h:h + 4] != b"PK\x03\x04":
+            bad.append(f"a {i.filename!r} bejegyzes local headere hianyzik")
+        else:
+            nl = int.from_bytes(data[h + 26:h + 28], "little")
+            lflags = int.from_bytes(data[h + 6:h + 8], "little")
+            raw = data[h + 30:h + 30 + nl]
+            lname = raw.decode("utf-8" if lflags & 0x800 else "cp437", errors="replace")
+            if lname != i.orig_filename:
+                bad.append(f"a {i.filename!r} bejegyzes local headere mas nevet visel: {lname!r}")
+            if lflags & 0x1:
+                bad.append(f"titkositott bejegyzes a zipben: {i.filename!r}")
         n = i.filename
         if n.startswith("/") or re.match(r"^[A-Za-z]:", n) or "\\" in n or ".." in n.split("/"):
             bad.append(f"tiltott ut a zipben: {n!r}")
