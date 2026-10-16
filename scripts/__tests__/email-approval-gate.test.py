@@ -118,7 +118,10 @@ def run_gate(store, payload, extra_env=None, gate=GATE):
     env = dict(os.environ,
                EMAIL_APPROVAL_GATE_STORE=store,
                EMAIL_APPROVAL_WINDOW_S=str(WINDOW),
-               OUTGOING_COPY_GATE_RULES=os.path.join(store, "no-rules.json"))
+               OUTGOING_COPY_GATE_RULES=os.path.join(store, "no-rules.json"),
+               # MAILCCGATE1016: off unless a test turns it on, so an install .env
+               # with MAIL_OWNER_CC set cannot change the other tests' outcome.
+               MAIL_OWNER_CC="")
     if extra_env:
         env.update(extra_env)
     proc = subprocess.run([sys.executable, gate], input=json.dumps(payload).encode(),
@@ -895,6 +898,68 @@ with tempfile.TemporaryDirectory() as td:
     code, _, err = run_gate(store, LS, extra_env=bad_window)
     check("HOOKDEPLOAD1008: malformed EMAIL_APPROVAL_WINDOW_S -> a non-send Bash still passes",
           code == 0, f"exit={code} err={err[:200]!r}")
+
+print("\nMAILCCGATE1016: the owner's copy is a gate at every level")
+OWNER = "owner@example.com"
+ON = {"MAIL_OWNER_CC": OWNER}
+with tempfile.TemporaryDirectory() as td:
+    for lvl in (2, 3):
+        store = make_store(os.path.join(td, f"l{lvl}"), level=lvl)
+        code, _, err = run_gate(store, mcp_send(), extra_env=ON)
+        check(f"level {lvl}: send_email without the owner in to/cc/bcc -> DENIED, naming the address",
+              code == 2 and OWNER in err and "cc" in err, f"exit={code} err={err[:200]!r}")
+    store = make_store(os.path.join(td, "l3b"), level=3)
+    code, _, err = run_gate(store, mcp_send(cc=OWNER), extra_env=ON)
+    check("level 3: the owner in cc -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    code, _, err = run_gate(store, mcp_send(cc="Owner Name <OWNER@Example.com>"), extra_env=ON)
+    check("level 3: the owner in cc as a display-name form, other case -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    code, _, err = run_gate(store, mcp_send(to=OWNER), extra_env=ON)
+    check("level 3: the owner as the recipient (to) -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    bcc = mcp_send()
+    bcc["tool_input"]["bcc"] = [OWNER]
+    code, _, err = run_gate(store, bcc, extra_env=ON)
+    check("level 3: the owner in bcc -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    code, _, err = run_gate(store, mcp_send(cc="other@example.org"), extra_env=ON)
+    check("level 3: a cc that is not the owner -> DENIED", code == 2, f"exit={code} err={err[:200]!r}")
+    code, _, err = run_gate(store, mcp_send(cc="xowner@example.com"), extra_env=ON)
+    check("level 3: an address that only CONTAINS the owner's -> DENIED", code == 2, f"exit={code} err={err[:200]!r}")
+    code, _, err = run_gate(store, mcp_send(), extra_env={"MAIL_OWNER_CC": ""})
+    check("level 3: MAIL_OWNER_CC unset -> the check is off, allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    draft = {"tool_name": "mcp__server-gmail-autoauth-mcp__draft_email",
+             "tool_input": {"to": ["a@b.hu"], "subject": "x", "body": "y"}}
+    code, _, err = run_gate(store, draft, extra_env=ON)
+    check("a draft without the owner -> DENIED (send_draft can only be checked here)",
+          code == 2 and "piszkozat" in err, f"exit={code} err={err[:200]!r}")
+    draft["tool_input"]["cc"] = [OWNER]
+    code, _, err = run_gate(store, draft, extra_env=ON)
+    check("a draft with the owner in cc -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    l1 = make_store(os.path.join(td, "l1"), level=1)
+    code, _, err = run_gate(l1, draft, extra_env=ON)
+    check("level 1: a draft with the owner in cc is still not a send -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    mdraft = {"tool_name": "mcp__x__manage_email",
+              "tool_input": {"operation": "reply", "draft": True, "body": "y"}}
+    code, _, err = run_gate(store, mdraft, extra_env=ON)
+    check("manage_email reply draft without the owner -> DENIED", code == 2, f"exit={code} err={err[:200]!r}")
+    msearch = {"tool_name": "mcp__x__manage_email", "tool_input": {"operation": "search", "query": "x"}}
+    code, _, err = run_gate(store, msearch, extra_env=ON)
+    check("manage_email search -> not checked, allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    upd = {"tool_name": "mcp__claude_ai_Gmail__update_draft", "tool_input": {"draftId": "d1", "body": "y"}}
+    code, _, err = run_gate(store, upd, extra_env=ON)
+    check("update_draft (only the changed fields) -> not checked, allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    msend = {"tool_name": "mcp__x__manage_email",
+             "tool_input": {"operation": "send", "to": "a@b.hu", "cc": OWNER, "subject": "x", "body": "y"}}
+    code, _, err = run_gate(store, msend, extra_env=ON)
+    check("level 3: manage_email send with the owner in cc (string field) -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    msend["tool_input"].pop("cc")
+    code, _, err = run_gate(store, msend, extra_env=ON)
+    check("level 3: manage_email send without the owner -> DENIED", code == 2, f"exit={code} err={err[:200]!r}")
+    conn = {"tool_name": "mcp__claude_ai_Gmail__send_message",
+            "tool_input": {"to": "a@b.hu, " + OWNER, "subject": "x", "body": "y"}}
+    code, _, err = run_gate(store, conn, extra_env=ON)
+    check("level 3: connector send with the owner in a comma-separated to -> allowed", code == 0, f"exit={code} err={err[:200]!r}")
+    LSX = {"tool_name": "Bash", "tool_input": {"command": "ls -la"}}
+    code, _, err = run_gate(store, LSX, extra_env=ON)
+    check("a non-send Bash -> not checked, allowed", code == 0, f"exit={code} err={err[:200]!r}")
 
 print()
 if failed:
