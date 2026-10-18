@@ -335,7 +335,7 @@ export async function tryHandleMemories(ctx: RouteContext): Promise<boolean> {
               .all(agentId, `%${q}%`, `%${q}%`, limit)) as Memory[]
       }
     } else if (q) {
-      results = searchMemories(q, ALLOWED_CHAT_ID, limit, !strictOnly, searchCategory)
+      results = searchMemories(q, ALLOWED_CHAT_ID, limit, !strictOnly, searchCategory, searchTrace)
       if (results.length === 0) {
         const db2 = getDb()
         results = (searchCategory

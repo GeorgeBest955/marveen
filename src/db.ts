@@ -1852,9 +1852,20 @@ function withoutRank<T extends { rank: number }>(rows: T[]): Omit<T, 'rank'>[] {
   return rows.map(({ rank: _rank, ...rest }) => rest)
 }
 
-export function searchMemories(query: string, chatId: string, limit = 3, allowRelaxed = true, category?: string): Memory[] {
+// `trace` reports whether the answer came from the relaxed (OR) retry, as on
+// searchAgentMemories. Without it the agent-less GET /api/memories branch
+// labelled every answer relaxed=false, so rescued near-misses for a pattern
+// that never existed read as real hits (MEMAGENTLESSRELAX1018).
+export function searchMemories(
+  query: string,
+  chatId: string,
+  limit = 3,
+  allowRelaxed = true,
+  category?: string,
+  trace?: { relaxed: boolean },
+): Memory[] {
   try {
-    const { rows } = ftsWithOrFallback(query, (terms) =>
+    const { rows, relaxed } = ftsWithOrFallback(query, (terms) =>
       (category
         ? db.prepare(
             `SELECT m.*, f.rank AS rank FROM memories m
@@ -1871,6 +1882,7 @@ export function searchMemories(query: string, chatId: string, limit = 3, allowRe
              LIMIT ?`
           ).all(terms, chatId, limit * RECENCY_OVERSAMPLE)) as (Memory & { rank: number })[]
       , allowRelaxed)
+    if (trace) trace.relaxed = relaxed
     return withoutRank(reRankByRecency(rows, limit)) as Memory[]
   } catch {
     return []
