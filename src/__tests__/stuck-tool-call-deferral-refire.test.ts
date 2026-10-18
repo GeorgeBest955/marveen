@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   resume: vi.fn(async () => { h.times.push(Date.now() - h.t0); return true }),
   info: vi.fn(),
   warn: vi.fn(),
+  debug: vi.fn(),
 }))
 
 vi.mock('node:child_process', () => ({
@@ -30,7 +31,7 @@ vi.mock('node:child_process', () => ({
     throw new Error(`unexpected exec ${file} ${args.join(' ')}`)
   },
 }))
-vi.mock('../logger.js', () => ({ logger: { info: h.info, warn: h.warn, error: vi.fn(), debug: vi.fn() } }))
+vi.mock('../logger.js', () => ({ logger: { info: h.info, warn: h.warn, error: vi.fn(), debug: h.debug } }))
 vi.mock('../platform.js', () => ({ resolveFromPath: () => '/usr/bin/tmux' }))
 vi.mock('../config.js', () => ({ PROJECT_ROOT: '/nonexistent-project-root', STORE_DIR: '/nonexistent-store-dir' }))
 vi.mock('../web/agent-process.js', () => ({ capturePane: () => h.pane }))
@@ -83,6 +84,7 @@ beforeEach(async () => {
   h.resume.mockClear()
   h.info.mockClear()
   h.warn.mockClear()
+  h.debug.mockClear()
 })
 afterEach(() => { vi.useRealTimers() })
 
@@ -131,6 +133,30 @@ describe('a deferred verdict re-fires on the next poll', () => {
   })
 })
 
+describe('the transcript gate on a re-fired verdict: written since the freeze = alive (Samu, #2051 review)', () => {
+  // The measured live shape: a fresh-transcript abort, then a 40 s write gap (a 30 s snapshot sees
+  // a 31 s old write on the next poll and would let the kill through), then the session writes again.
+  it('fresh abort, 40 s write gap, then a new write -> NO respawn, and the abort warns once per spell', async () => {
+    await drive(30, i => {
+      if (i >= 7) h.mtime = i < 9 ? h.t0 + pollT(7) - 1_000 : h.t0 + pollT(8) + 9_000
+    })
+    expect(h.resume).not.toHaveBeenCalled()
+    const aborts = (fn: typeof h.warn) => fn.mock.calls.filter(c => /ABORTING recovery/.test(String(c[1]))).length
+    expect(aborts(h.warn)).toBe(1)
+    expect(aborts(h.debug)).toBe(30 - 7 - 1)
+  })
+
+  it('a long silence after a write inside the spell is still alive: no respawn for 30 minutes', async () => {
+    await drive(60, i => { if (i >= 7) h.mtime = h.t0 + pollT(7) - 1_000 })
+    expect(h.resume).not.toHaveBeenCalled()
+  })
+
+  it('a real wedge whose last write PREDATES the freeze recovers at the first verdict, unchanged', async () => {
+    await drive(30, () => { h.mtime = h.t0 + 20_000 })   // written at 20 s; the first stagnant poll is at 60 s
+    expect(h.times).toEqual([FIRST_VERDICT_MS])
+  })
+})
+
 describe('wiring: every deferring guard stores the spell through deferVerdict()', () => {
   it('each deferral log line is followed by deferVerdict(session, next) before its return', async () => {
     const { readFileSync } = await import('node:fs')
@@ -141,6 +167,7 @@ describe('wiring: every deferring guard stores the spell through deferVerdict()'
       'claude is CPU-active (not the idle wedge profile) -- deferring recovery',
       'a tool child process is active (long foreground tool call, not a wedge) -- deferring recovery',
       'ABORTING recovery (STUCKFREEZE819)',
+      'ABORTING recovery (STUCKATTEMPTS1018)',
     ]) {
       const at = src.indexOf(needle)
       expect(at, needle).toBeGreaterThan(-1)
