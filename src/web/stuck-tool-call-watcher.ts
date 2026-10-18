@@ -451,6 +451,17 @@ export function shouldDeferForRecentRespawn(
   return lastRespawnMs > 0 && nowMs - lastRespawnMs < graceMs
 }
 
+// STUCKATTEMPTS1018: a guard that DEFERS a verdict (rather than ending the spell) must store the
+// spell with attempts back at 0. decideStuckToolCallRecovery() already stored attempts=1 for this
+// verdict, and with attempts >= 1 it answers "recovery already fired: hold" for the rest of the
+// spell -- so a bare `return` turned every deferral into a permanent stand-down, and a real wedge
+// behind it was never recovered. Measured before this fix: one CPU-busy verdict sample, then a
+// frozen counter at 1.8% CPU for 30 minutes -> zero recoveries. With attempts reset, the same spell
+// re-fires on the next poll and every guard is asked again.
+function deferVerdict(session: string, next: StuckToolCallState): void {
+  watchState.set(session, { ...next, attempts: 0 })
+}
+
 async function checkSession(label: string, session: string): Promise<void> {
   const pane = capturePane(session)
   const sig = pane == null ? null : stuckToolCallSignature(pane)
@@ -564,6 +575,7 @@ async function checkSession(label: string, session: string): Promise<void> {
         { label, session, sinceRespawnMs: lastRespawn ? Date.now() - lastRespawn : null, graceMs: MARVEEN_POST_RESPAWN_GRACE_MS },
         'stuck-tool-call-watcher: recent respawn within grace, deferring recovery (avoid double-respawn / boot churn)',
       )
+      deferVerdict(session, next)
       return
     }
     // CPU-profile guard (#248): the genuine wedge is a render loop blocked on
@@ -577,6 +589,7 @@ async function checkSession(label: string, session: string): Promise<void> {
         { label, session, cpuPercent, maxCpuPercent: WEDGE_MAX_CPU_PERCENT, seconds: next.lastSeconds },
         'stuck-tool-call-watcher: counter stagnant but claude is CPU-active (not the idle wedge profile) -- deferring recovery',
       )
+      deferVerdict(session, next)
       return
     }
     // STUCKCHILD1016: a live tool child (running, or CPU burned within the last polls) means a long
@@ -590,7 +603,7 @@ async function checkSession(label: string, session: string): Promise<void> {
           { label, session, cpuPercent, seconds: next.lastSeconds, stagnantPolls: next.stagnantPolls },
           'stuck-tool-call-watcher: counter stagnant but a tool child process is active (long foreground tool call, not a wedge) -- deferring recovery',
         )
-        watchState.set(session, { ...next, attempts: 0 })
+        deferVerdict(session, next)
         return
       }
       logger.warn(
@@ -625,6 +638,7 @@ async function checkSession(label: string, session: string): Promise<void> {
         { label, session, transcriptAgeMs: transcriptMtime ? Date.now() - transcriptMtime : null, freshMs: STALE_VERDICT_FRESH_MS, seconds: next.lastSeconds },
         'stuck-tool-call-watcher: verdict stale -- the session transcript was written moments ago, the session is alive; ABORTING recovery (STUCKFREEZE819)',
       )
+      deferVerdict(session, next)
       return
     }
     // Audit log requested by Marveen 2026-06-02: every respawn this watcher
