@@ -99,10 +99,16 @@ export function confirmsWedgeProfile(cpuPercent: number | null, maxCpuPercent: n
 // populations.
 //
 // Known limit, stated not hidden: the mtime is DIRECTORY-level (newest jsonl
-// under the main session's project dir), so a hypothetical sibling session
-// with the same cwd could mask a real wedge -- for at most one sweep at a
-// time, because an abort keeps the spell and the next poll re-fires the
-// verdict once the masking writer pauses.
+// under the main session's project dir), so another session writing into the
+// same project dir (same cwd) masks a real wedge. Since STUCKATTEMPTS1018 the
+// kill also needs NO write since the freeze (transcriptWrittenSinceStagnation),
+// so the mask lasts for as long as the other writer writes at all during the
+// spell, not for one sweep: one write after stagnantSince holds the recovery
+// until the counter moves or the spell ends. Measured on this host
+// (2026-10-11..18, Samu's #2051 review): the main project dir held 10 jsonl
+// files that replace each other, and of 938 five-minute windows with writes
+// only 5 had two writers, all of them session hand-overs -- so no overlap here.
+// An install that runs a second claude session in the same project dir has it.
 export const STALE_VERDICT_FRESH_MS = 30_000
 
 // STUCKALLCLEAR923 (owner request, 2026-09-23). The failed-recovery branch
